@@ -18,7 +18,7 @@
 
 # Version range - must match timestamp_monkey_patch.rb
 TESTED_VERSION_MIN = '1.0.0.0'
-TESTED_VERSION_MAX = '1.4.3.0'
+TESTED_VERSION_MAX = '1.5.0.0'
 
 # All 1.x versions to test when --all is passed
 # Source: https://rubygems.org/gems/duckdb/versions
@@ -42,6 +42,8 @@ ALL_VERSIONS = %w[
   1.4.1.1
   1.4.2.0
   1.4.3.0
+  1.4.4.0
+  1.5.0.0
 ].freeze
 
 EXPECTED_METHODS = {
@@ -141,11 +143,11 @@ def test_version(version = nil)
 
     # Run test with specific version
     env = { 'DUCKDB_VERSION' => version }
-    IO.popen([env, 'ruby', '-e', test_script], err: [:child, :out]) do |io|
+    IO.popen([env, 'ruby', '-e', test_script], err: %i[child out]) do |io|
       output = io.read
       io.close
       if $?.success?
-        puts "  PASS"
+        puts '  PASS'
         :pass
       else
         puts output.lines.map { |l| "  #{l}" }.join
@@ -154,7 +156,7 @@ def test_version(version = nil)
     end
   else
     # Test current version
-    IO.popen(['ruby', '-e', test_script], err: [:child, :out]) do |io|
+    IO.popen(['ruby', '-e', test_script], err: %i[child out]) do |io|
       output = io.read
       io.close
       if $?.success?
@@ -177,36 +179,36 @@ def test_current_version
   current = Gem::Version.new(version)
   in_range = current >= min && current <= max
 
-  puts "Verifying timestamp patch compatibility"
-  puts "=" * 60
+  puts 'Verifying timestamp patch compatibility'
+  puts '=' * 60
   puts "DuckDB gem version: #{version}"
   puts "Tested range:       #{TESTED_VERSION_MIN} - #{TESTED_VERSION_MAX}"
-  puts "In range:           #{in_range ? 'Yes' : 'No'}"
+  puts "In range:           #{in_range ? "Yes" : "No"}"
   puts
 
-  puts "Running tests..."
+  puts 'Running tests...'
   result = test_version
 
   puts
-  puts "=" * 60
+  puts '=' * 60
 
   if result == :pass
     if in_range
-      puts "PASSED"
+      puts 'PASSED'
       puts
       puts "All tests passed. duckdb #{version} is compatible."
     else
-      puts "PASSED (but outside tested range)"
+      puts 'PASSED (but outside tested range)'
       puts
       puts "All tests passed. Consider updating the version range to include #{version}."
       puts
-      puts "Update TESTED_VERSION_MAX in:"
-      puts "  - lib/active_record/connection_adapters/duckdb/timestamp_monkey_patch.rb"
-      puts "  - bin/verify_timestamp_patch"
+      puts 'Update TESTED_VERSION_MAX in:'
+      puts '  - lib/active_record/connection_adapters/duckdb/timestamp_monkey_patch.rb'
+      puts '  - bin/verify_timestamp_patch'
     end
     0
   else
-    puts "FAILED"
+    puts 'FAILED'
     puts
     puts "Tests failed for duckdb #{version}."
     1
@@ -214,9 +216,9 @@ def test_current_version
 end
 
 def test_all_versions
-  puts "Verifying timestamp patch across all versions"
-  puts "=" * 60
-  puts "Testing versions: #{ALL_VERSIONS.join(', ')}"
+  puts 'Verifying timestamp patch across all versions'
+  puts '=' * 60
+  puts "Testing versions: #{ALL_VERSIONS.join(", ")}"
   puts
 
   results = {}
@@ -227,17 +229,17 @@ def test_all_versions
   end
 
   puts
-  puts "=" * 60
-  puts "Summary:"
+  puts '=' * 60
+  puts 'Summary:'
   puts
 
   passed = results.select { |_, v| v == :pass }.keys
   failed = results.select { |_, v| v == :fail }.keys
   skipped = results.select { |_, v| v == :skip }.keys
 
-  puts "Passed (#{passed.size}):  #{passed.join(', ')}" if passed.any?
-  puts "Failed (#{failed.size}):  #{failed.join(', ')}" if failed.any?
-  puts "Skipped (#{skipped.size}): #{skipped.join(', ')}" if skipped.any?
+  puts "Passed (#{passed.size}):  #{passed.join(", ")}" if passed.any?
+  puts "Failed (#{failed.size}):  #{failed.join(", ")}" if failed.any?
+  puts "Skipped (#{skipped.size}): #{skipped.join(", ")}" if skipped.any?
   puts
 
   if failed.empty? && passed.any?
@@ -246,7 +248,7 @@ def test_all_versions
     puts "Recommended version range: #{min_passed} - #{max_passed}"
     0
   else
-    puts "Some versions failed. Please investigate."
+    puts 'Some versions failed. Please investigate.'
     1
   end
 end
