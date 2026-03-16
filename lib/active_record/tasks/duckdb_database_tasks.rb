@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'active_record/tasks/database_tasks'
+require 'activerecord/duckdb/ducklake_postgres_tasks'
 require 'duckdb'
 
 module ActiveRecord
@@ -26,10 +27,13 @@ module ActiveRecord
         @root_path = root_path
       end
 
-      # Creates a new DuckDB database file or skips if in-memory mode
+      # Creates a new DuckDB database file or skips if in-memory mode.
+      # When using DuckLake with a Postgres backend, also creates the PostgreSQL database (if the pg gem is available).
       # @return [void]
       # @raise [StandardError] if database creation fails
       def create
+        run_ducklake_postgres_task(:create)
+
         # For DuckDB, creating a database means creating the file (if not in-memory)
         database_path = @configuration_hash[:database]
         return if MEMORY_MODE_KEYS.include?(database_path)
@@ -45,15 +49,18 @@ module ActiveRecord
         raise
       end
 
-      # Drops the DuckDB database by removing the database file
+      # Drops the DuckDB database by removing the database file.
+      # When using DuckLake with a Postgres backend, also drops the PostgreSQL database (if the pg gem is available).
       # @return [void]
       # @raise [StandardError] if database drop fails
       def drop
         db_path = @configuration_hash[:database]
-        return if MEMORY_MODE_KEYS.include?(db_path)
+        unless MEMORY_MODE_KEYS.include?(db_path)
+          db_file_path = File.absolute_path?(db_path) ? db_path : File.join(root_path, db_path)
+          FileUtils.rm_f(db_file_path)
+        end
 
-        db_file_path = File.absolute_path?(db_path) ? db_path : File.join(root_path, db_path)
-        FileUtils.rm_f(db_file_path)
+        run_ducklake_postgres_task(:drop)
       rescue StandardError => e
         warn "Couldn't drop database '#{db_path}'"
         warn "Error: #{e.message}"
@@ -148,6 +155,31 @@ module ActiveRecord
       private
 
       attr_reader :configuration_hash, :db_config, :root_path
+
+      def run_ducklake_postgres_task(action)
+        return unless ducklake_using_postgres?
+
+        params = Activerecord::Duckdb::DucklakePostgresTasks.connection_params_from_db_config(@db_config)
+        Activerecord::Duckdb::DucklakePostgresTasks.public_send(action, params)
+      rescue StandardError => e
+        db_name = params&.dig(:database)
+        warn "Couldn't #{action} PostgreSQL database '#{db_name}' for DuckLake. Please check secrets and connectivity."
+        warn "Error: #{e.message}"
+        raise
+      end
+
+      # @return [Boolean] true if config uses DuckLake with a Postgres backend
+      def ducklake_using_postgres?
+        attachments = configuration_hash[:attachments] || []
+        has_ducklake_postgres = attachments.any? do |a|
+          conn = (a[:connection_string] || a['connection_string']).to_s
+          conn.start_with?('ducklake:postgres')
+        end
+        return false unless has_ducklake_postgres
+
+        params = Activerecord::Duckdb::DucklakePostgresTasks.connection_params_from_db_config(@db_config)
+        params && params[:database].present?
+      end
 
       # Gets a database connection from the connection pool
       # @return [ActiveRecord::ConnectionAdapters::AbstractAdapter] The database connection

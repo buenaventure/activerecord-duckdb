@@ -229,6 +229,10 @@ development:
   use_database: analytics  # Switch to the attached database
 ```
 
+#### DuckLake + Postgres: creating and dropping the PostgreSQL database
+
+When using DuckLake with a Postgres backend (`connection_string: 'ducklake:postgres:'` and `secrets.postgres`), `rails db:create` and `rails db:drop` will **also** create and drop the PostgreSQL database **if the `pg` gem is installed**. If the `pg` gem is not present, the Postgres database is not created or dropped (no error); create or drop it manually or add `pg` to your Gemfile.
+
 ### Sample App setup
 
 The following steps are required to setup a sample application using the `activerecord-duckdb` gem:
