@@ -23,7 +23,7 @@ module ActiveRecord
       # @param root_path [String] Root path for the Rails application
       def initialize(db_config, root_path = ActiveRecord::Tasks::DatabaseTasks.root)
         @db_config = db_config
-        @configuration_hash = db_config.configuration_hash
+        @configuration_hash = db_config.configuration_hash.with_indifferent_access
         @root_path = root_path
       end
 
@@ -50,6 +50,7 @@ module ActiveRecord
       end
 
       # Drops the DuckDB database by removing the database file.
+      # When using DuckLake with a local DATA_PATH, also removes that data directory (rm_rf).
       # When using DuckLake with a Postgres backend, also drops the PostgreSQL database (if the pg gem is available).
       # @return [void]
       # @raise [StandardError] if database drop fails
@@ -58,6 +59,10 @@ module ActiveRecord
         unless MEMORY_MODE_KEYS.include?(db_path)
           db_file_path = File.absolute_path?(db_path) ? db_path : File.join(root_path, db_path)
           FileUtils.rm_f(db_file_path)
+        end
+
+        ducklake_data_paths.each do |path|
+          FileUtils.rm_rf(path) if File.directory?(path)
         end
 
         run_ducklake_postgres_task(:drop)
@@ -166,6 +171,29 @@ module ActiveRecord
         warn "Couldn't #{action} PostgreSQL database '#{db_name}' for DuckLake. Please check secrets and connectivity."
         warn "Error: #{e.message}"
         raise
+      end
+
+      # @return [Array<String>] absolute paths to local DuckLake DATA_PATH directories from attachments
+      def ducklake_data_paths
+        attachments = configuration_hash[:attachments] || []
+        paths = []
+        attachments.each do |a|
+          conn = a[:connection_string].to_s
+          next unless conn.start_with?('ducklake')
+
+          options = a[:options].to_s
+          next if options.empty?
+
+          # DATA_PATH '...' or DATA_PATH "..."
+          options.scan(/DATA_PATH\s+['"]([^'"]+)['"]/i).each do |(path)|
+            path = path.strip
+            next if path.match?(%r{\A(s3|https?|gs)://}i) # skip remote
+
+            path = File.join(root_path, path) unless File.absolute_path?(path)
+            paths << path
+          end
+        end
+        paths.uniq
       end
 
       # @return [Boolean] true if config uses DuckLake with a Postgres backend
