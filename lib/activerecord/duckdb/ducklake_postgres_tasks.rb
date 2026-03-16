@@ -8,6 +8,7 @@ module Activerecord
     class DucklakePostgresTasks
       class << self
         # Creates the PostgreSQL database. No-op if the +pg+ gem is not available.
+        # If the database already exists, does nothing (idempotent).
         # @param connection_params [Hash] Postgres connection params (symbol or string keys):
         #   +database+ (required), +host+, +port+, +user+ or +username+, +password+
         # @return [void]
@@ -15,6 +16,8 @@ module Activerecord
         def create(connection_params)
           with_maintenance_connection(connection_params, 'create') do |conn, db_name|
             conn.exec("CREATE DATABASE #{quote_ident(db_name)}")
+          rescue PG::DuplicateDatabase
+            # already exists, treat as success
           end
         end
 
