@@ -18,7 +18,7 @@
 
 # Version range - must match timestamp_monkey_patch.rb
 TESTED_VERSION_MIN = '1.0.0.0'
-TESTED_VERSION_MAX = '1.5.0.0'
+TESTED_VERSION_MAX = '1.5.0.1'
 
 # All 1.x versions to test when --all is passed
 # Source: https://rubygems.org/gems/duckdb/versions
@@ -44,6 +44,7 @@ ALL_VERSIONS = %w[
   1.4.3.0
   1.4.4.0
   1.5.0.0
+  1.5.0.1
 ].freeze
 
 EXPECTED_METHODS = {

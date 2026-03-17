@@ -9,7 +9,7 @@
 module DuckDBConverterTimestampMonkeyPatch
   # Version range verified by bin/verify_timestamp_patch
   TESTED_VERSION_MIN = '1.0.0.0'
-  TESTED_VERSION_MAX = '1.5.0.0'
+  TESTED_VERSION_MAX = '1.5.0.1'
 
   EXPECTED_METHODS = {
     _to_time: { arity: 7 },
