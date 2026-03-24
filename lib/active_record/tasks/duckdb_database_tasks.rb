@@ -91,6 +91,28 @@ module ActiveRecord
         nil
       end
 
+      # Ensures destructive tasks are not run against a protected environment (Rails 8.1+).
+      # @param db_config [ActiveRecord::DatabaseConfigurations::DatabaseConfig]
+      # @param migration_class [Class] typically ActiveRecord::Base
+      # @return [void]
+      # @raise [ActiveRecord::ProtectedEnvironmentError, ActiveRecord::EnvironmentMismatchError]
+      def check_current_protected_environment!(db_config, migration_class)
+        with_temporary_pool_for_migration_check(db_config, migration_class) do |pool|
+          migration_context = pool.migration_context
+          current = migration_context.current_environment
+          stored = migration_context.last_stored_environment
+
+          if migration_context.protected_environment?
+            raise ActiveRecord::ProtectedEnvironmentError.new(stored)
+          end
+
+          if stored && stored != current
+            raise ActiveRecord::EnvironmentMismatchError.new(current: current, stored: stored)
+          end
+        rescue ActiveRecord::NoDatabaseError
+        end
+      end
+
       # Dumps the database structure to a SQL file
       # @param filename [String] The filename to write the structure dump to
       # @param extra_flags [String, nil] Additional flags for the dump (unused)
@@ -160,6 +182,15 @@ module ActiveRecord
       private
 
       attr_reader :configuration_hash, :db_config, :root_path
+
+      def with_temporary_pool_for_migration_check(db_config, migration_class, clobber: false)
+        original_db_config = migration_class.connection_db_config
+        pool = migration_class.connection_handler.establish_connection(db_config, clobber: clobber)
+
+        yield pool
+      ensure
+        migration_class.connection_handler.establish_connection(original_db_config, clobber: clobber)
+      end
 
       def run_ducklake_postgres_task(action)
         return unless ducklake_using_postgres?

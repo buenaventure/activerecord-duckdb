@@ -309,6 +309,16 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
       expect { tasks.drop }.not_to raise_error
       expect { tasks.purge }.not_to raise_error
     end
+
+    it 'implements check_current_protected_environment! for Rails 8.1+ database tasks' do
+      ActiveRecord::Base.establish_connection(adapter: 'duckdb', database: ':memory:')
+      db_config = ActiveRecord::Base.connection_db_config
+      tasks = ActiveRecord::Tasks::DuckdbDatabaseTasks.new(db_config, Dir.tmpdir)
+
+      expect { tasks.check_current_protected_environment!(db_config, ActiveRecord::Base) }.not_to raise_error
+    ensure
+      ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?
+    end
   end
 
   describe 'error handling' do
