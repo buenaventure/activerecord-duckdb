@@ -3,7 +3,7 @@ PATH
   specs:
     activerecord-duckdb (0.1.0)
       activerecord (>= 7.0.0)
-      duckdb (>= 1.3, < 2.0)
+      duckdb (>= 1.5.0.2, < 2.0)
 
 GEM
   remote: https://rubygems.org/
