@@ -103,15 +103,6 @@ module ActiveRecord
           end
         end
 
-        # Determines if a column value should be returned after insert
-        # This is crucial - it tells Rails which columns should use RETURNING
-        # @param column [ActiveRecord::ConnectionAdapters::Column] The column to check
-        # @return [Boolean] true if column value should be returned after insert
-        def return_value_after_insert?(column)
-          # Return true for any column with a sequence default
-          column.default_function&.include?('nextval') || super
-        end
-
         # Extracts the last inserted ID from an insert result
         # @param result [ActiveRecord::Result] The result from an insert operation
         # @return [Object] The last inserted ID value
@@ -139,30 +130,6 @@ module ActiveRecord
             # Rails 7.2-8.0
             check_if_write_query(sql)
             mark_transaction_written_if_write(sql)
-          end
-        end
-
-        # Extracts and converts default values from DuckDB column defaults
-        # @param default [String, nil] The default value from column definition
-        # @return [Object, nil] The converted default value
-        def extract_value_from_default(default)
-          return nil if default.nil?
-
-          # IMPORTANT: Return nil for sequence defaults so Rails doesn't set id=0
-          return nil if default.to_s.include?('nextval(')
-
-          # Handle DuckDB default value formats
-          case default.to_s
-          when /^'(.*)'$/
-            ::Regexp.last_match(1) # Remove quotes from string defaults
-          when 'NULL'
-            nil
-          when /^\d+$/
-            default.to_i # Integer defaults
-          when /^\d+\.\d+$/
-            default.to_f # Float defaults
-          else
-            default
           end
         end
       end

@@ -126,13 +126,6 @@ module ActiveRecord
           false
         end
 
-        # Returns SQL expression to get the next value from a sequence
-        # @param sequence_name [String] The name of the sequence
-        # @return [String] SQL expression for getting next sequence value
-        def next_sequence_value(sequence_name)
-          "nextval(#{quote(sequence_name)})"
-        end
-
         # Resets a sequence to a specific value
         # @param sequence_name [String] The name of the sequence to reset
         # @param value [Integer] The value to reset the sequence to (default: 1)
@@ -742,14 +735,6 @@ module ActiveRecord
           else
             [:string, nil, nil, nil] # Default fallback
           end
-        end
-
-        # Generates a default sequence name for a table and column
-        # @param table_name [String] The name of the table
-        # @param column_name [String] The name of the column (default: 'id')
-        # @return [String] The generated sequence name
-        def default_sequence_name(table_name, column_name = 'id')
-          "#{table_name}_#{column_name}_seq"
         end
 
         # Gets the default integer type for primary keys
