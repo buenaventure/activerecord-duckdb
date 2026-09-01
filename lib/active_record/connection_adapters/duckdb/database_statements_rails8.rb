@@ -22,6 +22,7 @@ module ActiveRecord
         # @return [DuckDB::Result] The raw DuckDB result
         def raw_execute(sql, name = nil, binds = [], prepare: false, async: false, allow_retry: false, materialize_transactions: true, batch: false)
           casted_binds = type_casted_binds(binds)
+          sql = quack_sql(sql, casted_binds)
 
           log(sql, name, binds, casted_binds, async: async) do
             with_raw_connection(allow_retry:, materialize_transactions:) do |conn|

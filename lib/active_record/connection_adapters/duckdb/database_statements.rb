@@ -13,7 +13,10 @@ module ActiveRecord
         def begin_db_transaction
           log('BEGIN', 'TRANSACTION') do
             with_raw_connection do |conn|
-              conn.query('BEGIN TRANSACTION')
+              # Transaction control must run where the writes run. A BEGIN sent to the local
+              # client does not cover writes that reach a Quack server. A BEGIN sent through
+              # the funnel covers all writes.
+              conn.query(quack_sql('BEGIN TRANSACTION'))
             end
           end
         end
@@ -23,7 +26,7 @@ module ActiveRecord
         def commit_db_transaction
           log('COMMIT', 'TRANSACTION') do
             with_raw_connection do |conn|
-              conn.query('COMMIT')
+              conn.query(quack_sql('COMMIT'))
             end
           end
         end
@@ -33,7 +36,7 @@ module ActiveRecord
         def exec_rollback_db_transaction
           log('ROLLBACK', 'TRANSACTION') do
             with_raw_connection do |conn|
-              conn.query('ROLLBACK')
+              conn.query(quack_sql('ROLLBACK'))
             end
           end
         end
@@ -55,6 +58,7 @@ module ActiveRecord
           # Check for write queries on read-only connections (replica support)
           # Rails 8.1+ uses ensure_writes_are_allowed, earlier versions use check_if_write_query
           ensure_write_query_allowed(sql)
+          sql = quack_sql(sql)
 
           log(sql, name) do
             with_raw_connection do |conn|

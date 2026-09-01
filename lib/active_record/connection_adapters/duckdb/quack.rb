@@ -1,0 +1,175 @@
+# frozen_string_literal: true
+
+module ActiveRecord
+  module ConnectionAdapters
+    # Raised when a statement with bind parameters must be funneled to a Quack server.
+    # A Quack server accepts SQL as text only.
+    class QuackBindParametersNotSupported < NotImplementedError
+      def initialize(sql = nil)
+        super('Bind parameters cannot be sent to a Quack server, the statement is passed on as ' \
+              "text. Inline the values instead.#{" Statement: #{sql}" if sql}")
+      end
+    end
+
+    module Duckdb
+      # Sends every statement to a DuckDB server through the Quack client/server protocol.
+      #
+      # Quack exposes the server as an attached database. That attachment covers only a subset of
+      # SQL:
+      #
+      #   - No UPDATE or DELETE ("Can only update base table")
+      #   - No ALTER
+      #   - No metadata: information_schema comes back empty
+      #   - No statement that scans more than one remote table. This rules out joins, subqueries,
+      #     and INSERT ... SELECT
+      #
+      # This code does not sort statements by what the attachment supports. Instead, it wraps
+      # every statement in:
+      #
+      #   SELECT * FROM quack.query('<statement>')
+      #
+      # This wrapper sends the statement to the server as-is. The server then behaves like a
+      # local DuckDB, at no measurable cost. Funneled queries match direct queries in throughput
+      # and return the same types. Nothing resolves against the local catalog. So the client
+      # needs no USE statement and no cache invalidation.
+      #
+      # Configure Quack with a +quack+ section on the database:
+      #
+      #   ducklake:
+      #     adapter: duckdb
+      #     database: :memory
+      #     extensions:
+      #       - quack
+      #     quack:
+      #       uri: quack:localhost
+      #       token: <%= ENV['DUCKLAKE_QUACK_TOKEN'] %>
+      #       database: ducklake
+      #       disable_ssl: false # true when the server is addressed by anything but localhost
+      module Quack
+        # The name under which the server is attached. Only the funnel itself uses this name.
+        ATTACHMENT = 'quack'
+
+        # The +quack+ section of the database config
+        # @return [Hash, nil] config with symbol keys, or nil when no Quack server is configured
+        def quack_config
+          return @quack_config if defined?(@quack_config)
+
+          @quack_config = @config[:quack]&.symbolize_keys
+        end
+
+        # Whether statements are funneled to a Quack server
+        # @return [Boolean]
+        def quack?
+          !quack_config.nil?
+        end
+
+        # Whether ActiveRecord may keep bind parameters separate from the statement text.
+        #
+        # It may not. A funnel carries SQL as text only and has no place for bind parameters.
+        # This method turns prepared statements off, so ActiveRecord inlines the values into the
+        # statement itself. The funnel needs this: internal queries, such as the lookup for
+        # ar_internal_metadata, use bind parameters otherwise.
+        # #quack_sql still raises an error if any bind parameters arrive anyway.
+        #
+        # @return [Boolean]
+        def prepared_statements?
+          return false if quack?
+
+          super
+        end
+        # The superclass aliases the reader method to the predicate method. This override must
+        # point the alias at the new method too
+        alias prepared_statements prepared_statements?
+
+        # Wraps a statement so it runs in the server session. Returns the statement unchanged
+        # when no Quack server is set up. Callers may call this method for every statement, with
+        # no check first.
+        #
+        # @param sql [String] The statement to run
+        # @param binds [Array] Bind parameters of the statement. A funnel cannot carry them
+        # @return [String] The statement to hand to DuckDB
+        # @raise [QuackBindParametersNotSupported] if the statement has bind parameters
+        def quack_sql(sql, binds = [])
+          return sql unless quack?
+          raise QuackBindParametersNotSupported, sql if binds.any?
+
+          "SELECT * FROM #{ATTACHMENT}.query(#{quote(sql)})"
+        end
+
+        # Attaches the configured Quack server. Called during #configure_connection.
+        # @return [void]
+        def attach_quack
+          return unless quack?
+
+          raw_connection.execute(attach_quack_sql)
+
+          # The attachment exposes whichever database is current in the server session. A USE
+          # statement in the server's own startup script does not carry over to clients. So each
+          # connection must switch the session itself. After this, unqualified names resolve in
+          # that database.
+          database = quack_config[:database]
+          raw_connection.execute(quack_sql("USE #{quote_database_name(database)}")) if database.present?
+        end
+
+        # Quotes a database name for a USE statement, one part at a time. This keeps the
+        # separator in a qualified +catalog.schema+ name.
+        #
+        # @param database [String] The database name from the config
+        # @return [String] The quoted name
+        def quote_database_name(database)
+          database.to_s.split('.').map { |part| quote_column_name(part) }.join('.')
+        end
+
+        # The ATTACH that connects this client to the Quack server.
+        #
+        # DISABLE_SSL matters as soon as the server address is not localhost. The client picks
+        # the scheme from the host name. Localhost means plain HTTP. Every other host name means
+        # HTTPS. But a Quack server speaks only plain HTTP. So reaching a server by a service
+        # name needs +disable_ssl: true+, or needs TLS terminated by a proxy in front of the
+        # server.
+        #
+        # @return [String] the ATTACH statement
+        def attach_quack_sql
+          options = []
+          # This code quotes the token instead of interpolating it. A token is opaque text. An
+          # apostrophe in a token would otherwise end the string literal early and cause a
+          # parser error at connect time
+          options << "TOKEN #{quote(quack_config[:token])}" if quack_config[:token].present?
+
+          disable_ssl = quack_config[:disable_ssl]
+          # This code relies on Rails' own type coercion. YAML and ENV variables pass this value
+          # as the text 'false', not as a real boolean
+          unless disable_ssl.nil?
+            options << "DISABLE_SSL #{self.class.type_cast_config_to_boolean(disable_ssl) ? "true" : "false"}"
+          end
+
+          sql = "ATTACH #{quote(quack_config[:uri])} AS #{ATTACHMENT}"
+          sql << " (#{options.join(", ")})" unless options.empty?
+          sql
+        end
+
+        # Number of rows a statement changed.
+        # A funneled write reports this number in a single +Count+ column, not through the normal result.
+        # @param raw_result [DuckDB::Result] The raw DuckDB result
+        # @return [Integer] Number of rows affected
+        def affected_rows(raw_result)
+          return super unless quack? && quack_count_result?(raw_result)
+
+          raw_result.to_a.first&.first.to_i
+        end
+
+        private
+
+        # Whether a result is the row count that Quack reports back for a funneled write
+        # @param raw_result [DuckDB::Result] The raw DuckDB result
+        # @return [Boolean]
+        def quack_count_result?(raw_result)
+          return false unless raw_result.respond_to?(:columns)
+
+          column = raw_result.columns.first
+          column && (column.respond_to?(:name) ? column.name : column.to_s) == 'Count'
+        end
+      end
+    end
+  end
+end

@@ -22,6 +22,7 @@ module ActiveRecord
           ensure_write_query_allowed(sql)
 
           casted_binds = type_casted_binds(binds)
+          sql = quack_sql(sql, casted_binds)
 
           log(sql, name, binds, casted_binds, async:) do
             with_raw_connection(allow_retry:) do |conn|

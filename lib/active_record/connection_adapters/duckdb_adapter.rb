@@ -8,6 +8,7 @@ require 'active_record/connection_adapters/duckdb/column'
 require 'active_record/connection_adapters/duckdb/type/interval'
 require 'active_record/connection_adapters/duckdb/database_limits'
 require 'active_record/connection_adapters/duckdb/database_statements'
+require 'active_record/connection_adapters/duckdb/quack'
 require 'active_record/connection_adapters/duckdb/quoting'
 require 'active_record/connection_adapters/duckdb/schema_creation'
 require 'active_record/connection_adapters/duckdb/schema_statements'
@@ -63,6 +64,8 @@ module ActiveRecord
       include Duckdb::DatabaseStatements
       include Duckdb::Quoting
       include Duckdb::SchemaStatements
+      # This must come after DatabaseStatements. It overrides #affected_rows for funneled writes.
+      include Duckdb::Quack
 
       # Include Rails version-specific database statements.
       # Rails 8.0+: Use raw_execute, let base class handle internal_exec_query.
@@ -275,12 +278,21 @@ module ActiveRecord
         return @ducklake if defined?(@ducklake)
 
         @ducklake = begin
-          with_raw_connection do |conn|
-            result = conn.query('SELECT type FROM duckdb_databases() WHERE database_name = current_database()')
-            db_type = result.first&.first
-            db_type.to_s.downcase == 'ducklake'
-          end
-        rescue DuckDB::Error
+          # This method calls #execute instead of the raw connection. In Quack funnel mode,
+          # #execute sends the query to the Quack server, so the server reports on its own
+          # database. The raw connection would instead query the client's own, empty, local
+          # database.
+          result = execute('SELECT type FROM duckdb_databases() WHERE database_name = current_database()', 'SCHEMA')
+          db_type = result.first&.first
+          db_type.to_s.downcase == 'ducklake'
+        rescue ActiveRecord::ConnectionFailed, ActiveRecord::QueryAborted
+          # ActiveRecord::ConnectionFailed and ActiveRecord::QueryAborted are both
+          # ActiveRecord::StatementInvalid. Without this rescue, the rescue below would treat
+          # an unreachable database as "not DuckLake". It would then memoize that answer for
+          # the life of the connection. The adapter would then emit PRIMARY KEY DDL against a
+          # lake that cannot accept it. This rescue re-raises the error instead.
+          raise
+        rescue DuckDB::Error, ActiveRecord::StatementInvalid
           false
         end
       end
@@ -401,6 +413,7 @@ module ActiveRecord
         apply_settings
         create_secrets
         attach_databases
+        attach_quack
         use_database
         lock_configuration
       end

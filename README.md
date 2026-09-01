@@ -229,6 +229,44 @@ development:
   use_database: analytics  # Switch to the attached database
 ```
 
+#### Remote DuckDB over Quack
+
+A `quack:` section points the connection at a DuckDB server. This server serves DuckLake over the
+Quack client/server protocol. The adapter funnels every statement to that server. So the application
+talks to a remote lake, but everything above the adapter stays ordinary ActiveRecord:
+
+```yaml
+production:
+  adapter: duckdb
+  database: ":memory:"
+  extensions:
+    - httpfs
+    - quack
+  quack:
+    uri: quack:localhost
+    token: <%= ENV["DUCKLAKE_QUACK_TOKEN"] %>
+    database: ducklake
+    disable_ssl: false # true when the server is addressed by anything but localhost
+```
+
+- `uri`: the server address, `quack:host[:port]`. The default port is 9494.
+- `token`: the server's auth token, if the server requires one.
+- `database`: the database to `USE` in the server session. The adapter then resolves unqualified
+  names there.
+- `disable_ssl`: a Quack server speaks only plain HTTP. The client picks the connection scheme from
+  the hostname. For any host other than `localhost`, set this to `true`. Or put a proxy in front
+  that terminates TLS.
+
+Both `httpfs` and `quack` are required. `quack` pulls in `httpfs` lazily. So, with autoloading off, a
+client that installs only `quack` fails on its first query, not at `LOAD`.
+
+Notes and limitations:
+
+- **Bind parameters cannot be funneled**, because the funnel carries SQL as plain text. So the
+  adapter forces `prepared_statements` off. It inlines values with its own quoting instead.
+- **Savepoints are unsupported**, so nested transactions do not isolate. The adapter funnels
+  transaction control too. Transaction control is per client session.
+
 #### DuckLake + Postgres: creating and dropping the PostgreSQL database
 
 When using DuckLake with a Postgres backend (`connection_string: 'ducklake:postgres:'` and `secrets.postgres`), `rails db:create` and `rails db:drop` will **also** create and drop the PostgreSQL database **if the `pg` gem is installed**. If the `pg` gem is not present, the Postgres database is not created or dropped (no error); create or drop it manually or add `pg` to your Gemfile.
@@ -256,8 +294,9 @@ class Widget < ApplicationRecord
 end
 ```
 
-From there, `find`, `update`, `reload`, `destroy`, and associations all work. You must set
-`self.primary_key` by hand: the table carries no constraint for the adapter to report.
+From there, `find`, `update`, `reload`, `destroy`, and associations all work. Quack mode needs this
+same escape. You must set `self.primary_key` by hand: the table carries no constraint for the
+adapter to report.
 
 ### Sample App setup
 

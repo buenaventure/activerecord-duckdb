@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add Quack funnel mode. A `quack:` section on the database config points at a DuckDB server that
+  serves DuckLake over the Quack client/server protocol. The adapter funnels every statement to it.
+  See the README.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
 
 ### Fixed
