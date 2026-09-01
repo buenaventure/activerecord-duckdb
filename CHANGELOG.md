@@ -21,6 +21,10 @@
   separately. So repartitioning a table no longer dumps both the old and the new partition columns.
 - Fix `ducklake_table_options`. It no longer drops a table's options from the schema dump when the
   table carries a metadata key outside the dumpable set.
+- Fix `sequence_exists?`. It now reads `duckdb_sequences()` instead of consuming a value with
+  `nextval()` on every call. DuckDB does not roll a sequence back. So, before this fix, a table
+  recreated with `force: true` started at id 2.
+- Fix `sequences`. It now returns the current database's sequences, instead of always `[]`.
 
 ## [0.1.0] - 2025-06-18
 

@@ -261,6 +261,37 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
       expect(adapter.sequence_exists?(sequence_name)).to be false
     end
 
+    # #sequence_exists? used to probe with SELECT nextval(...), then roll back. But DuckDB does not
+    # roll a sequence back. So each check consumed a value.
+    it 'does not consume a value when asked whether a sequence exists' do
+      adapter.create_sequence('probe_seq', start_with: 1)
+
+      3.times { expect(adapter.sequence_exists?('probe_seq')).to be true }
+
+      expect(adapter.select_value("SELECT nextval('probe_seq')")).to eq(1)
+    end
+
+    it 'starts a table recreated with force: true at id 1' do
+      2.times { adapter.create_table(:recreated, force: true) { |t| t.string :name } }
+      model = Class.new(ActiveRecord::Base) { self.table_name = 'recreated' }
+      model.reset_column_information
+
+      expect(model.create!(name: 'first').id).to eq(1)
+    end
+
+    it 'lists the sequences of the current database' do
+      adapter.create_table(:listed, force: true) { |t| t.string :name }
+
+      expect(adapter.sequences).to include('listed_id_seq')
+    end
+
+    it 'excludes the sequences of an attached database' do
+      adapter.execute("ATTACH ':memory:' AS other")
+      adapter.execute('CREATE SEQUENCE other.main.elsewhere_seq')
+
+      expect(adapter.sequences).not_to include('elsewhere_seq')
+    end
+
     it 'supports insert returning' do
       expect(adapter.supports_insert_returning?).to be true
       expect(adapter.use_insert_returning?).to be true

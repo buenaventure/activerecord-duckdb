@@ -104,25 +104,19 @@ module ActiveRecord
         end
 
         # Checks if a sequence exists in the database
+        #
+        # This method reads the answer from the catalog. The obvious check was to call nextval
+        # and roll back the transaction. This does not work. DuckDB does not roll back a
+        # sequence value, so each check consumed one.
+        #
         # @param sequence_name [String] The name of the sequence to check
         # @return [Boolean] true if the sequence exists, false otherwise
         def sequence_exists?(sequence_name)
-          # Try to get next value from sequence in a way that doesn't consume it
-          # Use a transaction that we can rollback to avoid side effects
-          transaction do
-            execute("SELECT nextval(#{quote(sequence_name)})", 'SCHEMA')
-            raise ActiveRecord::Rollback # Rollback to avoid consuming the sequence value
-          end
-          true
-        rescue ActiveRecord::StatementInvalid, DuckDB::Error => e
-          # If the sequence doesn't exist, nextval will fail with a specific error
-          raise unless e.message.include?('does not exist') || e.message.include?('Catalog Error')
-
-          false
-
-        # Re-raise other types of errors
-        rescue StandardError
-          # For any other error, assume sequence doesn't exist
+          sql = "#{sequence_sql} AND sequence_name = #{quote(sequence_name.to_s)}"
+          execute(sql, 'SCHEMA').to_a.any?
+        rescue ActiveRecord::StatementInvalid, DuckDB::Error, StandardError
+          # #create_sequence_safely asks this method before every create_table. If the catalog
+          # is unreadable, this method answers "no" instead of breaking the migration.
           false
         end
 
@@ -134,10 +128,11 @@ module ActiveRecord
           execute("ALTER SEQUENCE #{quote_table_name(sequence_name)} RESTART WITH #{value.to_i}", 'Reset Sequence')
         end
 
-        # Returns a list of all sequences in the database
-        # @return [Array<String>] Array of sequence names (currently returns empty array)
+        # Returns a list of all sequences in the current database
+        # @return [Array<String>] Array of sequence names
         def sequences
-          # For now, return empty array since DuckDB sequence introspection is limited
+          execute(sequence_sql, 'SCHEMA').to_a.map { |row| row[0] }
+        rescue ActiveRecord::StatementInvalid, DuckDB::Error, StandardError
           []
         end
 
@@ -376,6 +371,16 @@ module ActiveRecord
             Rails.logger&.warn("Could not retrieve indexes for table #{table_name}: #{e.message}") if defined?(Rails)
           end
           indexes
+        end
+
+        # Generates SQL selecting the sequences of the current database.
+        #
+        # This query filters by database_name for the same reason as #data_source_sql and
+        # #indexes. duckdb_sequences() lists sequences from every attached database.
+        #
+        # @return [String] SQL query string, ending in a WHERE clause callers can extend
+        def sequence_sql
+          'SELECT sequence_name FROM duckdb_sequences() WHERE database_name = current_database()'
         end
 
         # Generates SQL for querying data sources (tables/views) with optional filtering
