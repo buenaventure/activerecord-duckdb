@@ -6,12 +6,41 @@ module ActiveRecord
       module Quoting
         extend ActiveSupport::Concern
 
+        # This message replaces DuckDB's own error for an empty identifier.
+        #
+        # A DuckLake table has no primary key constraint. #primary_keys then reports none.
+        # ActiveRecord quotes the nil key name of a single-record UPDATE, DELETE, or reload.
+        # This produces `WHERE "" = ...`. DuckDB rejects this with `Parser Error: zero-length
+        # delimited identifier`. That error names neither the table nor the cause.
+        #
+        # An empty identifier is never valid SQL, no matter what produced it. This check
+        # applies to every path that can produce one.
+        MISSING_IDENTIFIER_MESSAGE = <<~MESSAGE.squish
+          Cannot build SQL for an empty column or table name. The usual cause is a model with no
+          primary key: DuckLake does not support primary key constraints, so tables created in
+          DuckLake mode have none, and #find, #reload, #update and #destroy have no key to match a
+          single row on. Use the set-based #update_all or #delete_all with an explicit condition, or
+          give the table an id column your application populates and declare it on the model with
+          `self.primary_key = "id"`.
+        MESSAGE
+
+        # Quotes an identifier for use in SQL.
+        # Raises an error if the identifier is nil or empty.
+        # @param name [String, Symbol, nil] The identifier to quote
+        # @return [String] The identifier wrapped in double quotes
+        # @raise [ActiveRecord::ActiveRecordError] if the name is nil or empty
+        def self.quote_identifier(name)
+          raise ActiveRecord::ActiveRecordError, MISSING_IDENTIFIER_MESSAGE if name.nil? || name.to_s.empty?
+
+          %("#{name}")
+        end
+
         module ClassMethods
           # Quotes a column name for use in SQL statements
           # @param name [String, Symbol] The column name to quote
           # @return [String] The quoted column name wrapped in double quotes
           def quote_column_name(name)
-            %("#{name}")
+            Quoting.quote_identifier(name)
           end
         end
 
@@ -27,7 +56,7 @@ module ActiveRecord
         # @param name [String, Symbol] The column name to quote
         # @return [String] The quoted column name wrapped in double quotes
         def quote_column_name(name)
-          %("#{name}")
+          Quoting.quote_identifier(name)
         end
 
         # Quotes a value for safe inclusion in SQL statements

@@ -211,9 +211,23 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quoting do
     end
 
     it 'handles edge cases' do
-      expect(adapter.quote_column_name('')).to eq('""')
       expect(adapter.quote_column_name('123')).to eq('"123"')
       expect(adapter.quote_column_name('1column')).to eq('"1column"')
+    end
+
+    # An empty identifier is never valid SQL. In practice, it comes from a DuckLake model with no
+    # primary key. On #update, #destroy and #reload, ActiveRecord quotes the nil key into
+    # `WHERE "" = ...`. DuckDB answers with a parser error that names neither the table nor the
+    # cause. The adapter refuses the empty identifier here instead, so it can give a clearer message.
+    it 'refuses an empty column name rather than emitting a zero-length identifier' do
+      expect { adapter.quote_column_name('') }
+        .to raise_error(ActiveRecord::ActiveRecordError, /empty column or table name.*primary key/m)
+      expect { adapter.quote_column_name(nil) }
+        .to raise_error(ActiveRecord::ActiveRecordError, /empty column or table name.*primary key/m)
+      expect { adapter.quote_table_name(nil) }
+        .to raise_error(ActiveRecord::ActiveRecordError, /empty column or table name.*primary key/m)
+      expect { adapter.class.quote_column_name(nil) }
+        .to raise_error(ActiveRecord::ActiveRecordError, /empty column or table name.*primary key/m)
     end
 
     it 'handles unicode column names' do
