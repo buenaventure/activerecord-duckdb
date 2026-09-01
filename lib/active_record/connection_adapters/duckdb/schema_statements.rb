@@ -170,15 +170,24 @@ module ActiveRecord
 
           # Query partition info from DuckLake metadata tables
           # Schema:
+          #   ducklake_partition_info:   partition_id, table_id, begin_snapshot, end_snapshot
           #   ducklake_partition_column: partition_id, table_id, partition_key_index, column_id, transform
           #   ducklake_column: column_id, table_id, column_name, ...
           #   ducklake_table: table_id, table_name, ...
+          #
+          # This query joins through ducklake_partition_info. That table tracks the version of
+          # each partition. ducklake_partition_column has no snapshot columns of its own.
+          # Without the join, a repartitioned table returns old columns together with
+          # current ones.
           sql = <<~SQL
             SELECT pc.partition_key_index, c.column_name, pc.transform
             FROM #{quote_table_name(metadata_schema)}.ducklake_partition_column pc
-            JOIN #{quote_table_name(metadata_schema)}.ducklake_table t ON pc.table_id = t.table_id
+            JOIN #{quote_table_name(metadata_schema)}.ducklake_partition_info pi
+              ON pi.partition_id = pc.partition_id AND pi.end_snapshot IS NULL
+            JOIN #{quote_table_name(metadata_schema)}.ducklake_table t ON pi.table_id = t.table_id
             JOIN #{quote_table_name(metadata_schema)}.ducklake_column c ON pc.column_id = c.column_id AND c.table_id = t.table_id
             WHERE t.table_name = #{quote(table_name.to_s)}
+              AND t.end_snapshot IS NULL AND c.end_snapshot IS NULL
             ORDER BY pc.partition_key_index
           SQL
 
@@ -293,7 +302,7 @@ module ActiveRecord
           # Get the table_id first
           table_sql = <<~SQL
             SELECT table_id FROM #{quote_table_name(metadata_schema)}.ducklake_table
-            WHERE table_name = #{quote(table_name.to_s)}
+            WHERE table_name = #{quote(table_name.to_s)} AND end_snapshot IS NULL
           SQL
           table_result = execute(table_sql, 'Get Table ID')
           table_id = table_result.first&.first
@@ -307,7 +316,12 @@ module ActiveRecord
           SQL
 
           result = execute(sql, 'Get DuckLake Table Options')
-          options = result.to_h { |key, value| DUMPABLE_DUCKLAKE_OPTIONS.include?(key) ? [key, value] : [] }
+          # This method uses #filter_map instead of #to_h with a conditional block. A to_h
+          # block that returns [] raises ArgumentError. The rescue below turned that error
+          # into nil. So a single non-dumpable key dropped every dumpable key with it.
+          options = result.to_a.filter_map do |key, value|
+            [key, value] if DUMPABLE_DUCKLAKE_OPTIONS.include?(key)
+          end.to_h
 
           options.presence
         rescue StandardError

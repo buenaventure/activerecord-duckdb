@@ -433,6 +433,23 @@ RSpec.describe 'DuckLake Schema Dumping' do
       expect(year_pos).to be < month_pos
       expect(month_pos).to be < day_pos
     end
+
+    # DuckLake versions the partitioning. Repartitioning leaves the previous partition columns in
+    # ducklake_partition_column, and this table carries no snapshot columns of its own. Only the
+    # join through ducklake_partition_info can tell the current version from the superseded one.
+    it 'reports only the current partitioning after a table is repartitioned' do
+      @connection.set_partitioned_by(:events, ['event_type'])
+      @connection.set_partitioned_by(:events, ['month(created_at)'])
+
+      expect(@connection.partition_expressions(:events)).to eq(['month(created_at)'])
+    end
+
+    it 'dumps only the current partitioning after a table is repartitioned' do
+      @connection.set_partitioned_by(:events, ['event_type'])
+      @connection.set_partitioned_by(:events, ['month(created_at)'])
+
+      expect(dump_schema).to include('set_partitioned_by "events", ["month(created_at)"]')
+    end
   end
 
   describe 'non-partitioned tables' do
@@ -615,6 +632,26 @@ RSpec.describe 'DuckLake Schema Dumping' do
 
       # Table option should have table name
       expect(schema).to include('"parquet_compression", "zstd", "events"')
+    end
+
+    # ducklake_metadata holds internal keys next to the user-configurable ones. DuckLake is also free
+    # to add table-scoped keys that this adapter does not know about. When the adapter filters out
+    # those keys, it must not also remove the dumpable ones.
+    it 'keeps the dumpable options when a table-scoped key is not dumpable' do
+      @connection.set_ducklake_option('parquet_compression', 'zstd', :events)
+
+      metadata_schema = @connection.send(:ducklake_metadata_schema)
+      table_id = @connection.execute(
+        "SELECT table_id FROM #{metadata_schema}.ducklake_table " \
+        "WHERE table_name = 'events' AND end_snapshot IS NULL"
+      ).first.first
+      @connection.execute(
+        "INSERT INTO #{metadata_schema}.ducklake_metadata (key, value, scope, scope_id) " \
+        "VALUES ('not_a_dumpable_option', 'x', 'table', #{table_id})"
+      )
+
+      expect(@connection.ducklake_table_options(:events)).to eq('parquet_compression' => 'zstd')
+      expect(dump_schema).to include('"parquet_compression", "zstd", "events"')
     end
   end
 end
