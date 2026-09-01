@@ -53,6 +53,8 @@ RSpec.configure do |config|
   # Clean up DuckLake tmp files after the test suite
   config.after(:suite) do
     Dir.glob('tmp/ducklake_*').each { |path| FileUtils.rm_rf(path) }
+    # Stops any Quack servers that the integration specs started
+    QuackServer.stop_all
   end
 
   # The settings below are suggested to provide a good initial experience
