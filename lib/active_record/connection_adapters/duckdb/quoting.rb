@@ -31,6 +31,12 @@ module ActiveRecord
         end
 
         # Quotes a value for safe inclusion in SQL statements
+        #
+        # Every value passes through this method when bind parameters are off, for example
+        # with +prepared_statements: false+. Every value also passes through this method in
+        # Quack funnel mode. This method must handle the same data as bind parameters,
+        # including binary payloads and sub-second timestamps.
+        #
         # @param value [Object] The value to quote
         # @return [String] The appropriately quoted value for SQL
         def quote(value)
@@ -45,13 +51,28 @@ module ActiveRecord
             'FALSE'
           when Numeric
             value.to_s
+          when ActiveRecord::Type::Binary::Data
+            quoted_binary(value)
           when Time, DateTime
-            "'#{value.utc.strftime("%Y-%m-%d %H:%M:%S")}'"
+            # #quoted_date keeps sub-second precision. It also follows ActiveRecord.default_timezone
+            "'#{quoted_date(value)}'"
           when Date
             "'#{value.strftime("%Y-%m-%d")}'"
           else
             "'#{value.to_s.gsub("'", "''")}'"
           end
+        end
+
+        # Quotes a binary payload as a DuckDB BLOB literal.
+        #
+        # This method uses hex encoding, not escaping. A BLOB can hold any byte value. A NUL
+        # byte or a backslash inside a quoted string literal causes a parser error or silent
+        # corruption.
+        #
+        # @param value [Object] The binary value, typically an ActiveRecord::Type::Binary::Data
+        # @return [String] A BLOB literal
+        def quoted_binary(value)
+          "unhex('#{value.to_s.unpack1("H*")}')::BLOB"
         end
       end
     end

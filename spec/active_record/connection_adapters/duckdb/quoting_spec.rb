@@ -151,6 +151,42 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quoting do
         expect(result).to end_with("'")
         expect(result).to include('2023-12-25')
       end
+
+      # Everything below matters because #quote is the only path values take once bind parameters
+      # are off. Bind parameters are always off in Quack funnel mode.
+      it 'keeps sub-second precision' do
+        time = Time.utc(2026, 8, 26, 12, 30, 45, 123_456)
+        expect(adapter.quote(time)).to eq("'2026-08-26 12:30:45.123456'")
+      end
+
+      it 'honours ActiveRecord.default_timezone rather than always converting to UTC' do
+        time = Time.new(2026, 8, 26, 12, 30, 45, '+02:00')
+        original = ActiveRecord.default_timezone
+        begin
+          ActiveRecord.default_timezone = :local
+          expect(adapter.quote(time)).to eq("'#{adapter.quoted_date(time)}'")
+          expect(adapter.quote(time)).to include('12:30:45')
+        ensure
+          ActiveRecord.default_timezone = original
+        end
+      end
+    end
+
+    describe 'binary values' do
+      let(:payload) { "\x00\xFF\x01abc".b }
+      let(:binary) { ActiveRecord::Type::Binary::Data.new(payload) }
+
+      it 'renders a BLOB literal instead of a quoted string' do
+        expect(adapter.quote(binary)).to eq("unhex('00ff01616263')::BLOB")
+      end
+
+      it 'round-trips bytes that no quoted string could carry' do
+        expect(adapter.select_value("SELECT #{adapter.quote(binary)}").b).to eq(payload)
+      end
+
+      it 'handles an empty payload' do
+        expect(adapter.quote(ActiveRecord::Type::Binary::Data.new(''))).to eq("unhex('')::BLOB")
+      end
     end
   end
 
