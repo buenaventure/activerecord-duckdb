@@ -5,6 +5,11 @@
 - Add Quack funnel mode. A `quack:` section on the database config points at a DuckDB server that
   serves DuckLake over the Quack client/server protocol. The adapter funnels every statement to it.
   See the README.
+- Add `QuackAttachmentFailed`. This error is raised when the `ATTACH` to a Quack server fails. No
+  table the server serves may have a computed column default. Attaching binds every default in the
+  server's catalog, so one `nextval()`, `uuid()`, or `now()` stops every later connection from
+  attaching. To find the cause, the error probes the server through `quack_query`, which needs no
+  attachment, and names the offending `database.table.column`.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
 
 ### Fixed

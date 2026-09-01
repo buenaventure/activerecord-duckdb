@@ -262,6 +262,21 @@ client that installs only `quack` fails on its first query, not at `LOAD`.
 
 Notes and limitations:
 
+- **No table the server serves may have a computed column default.** Attaching binds every column
+  default in the server's catalog. A literal default, such as `default: false` or `default: 0`,
+  binds fine. A default that needs a function or an operator does not, for example `nextval()`,
+  `uuid()`, or `now()`. Such a default makes every later `ATTACH` fail, so the second connection in a
+  pool cannot connect. This limit is not scoped to one database: a computed default in any database
+  the server serves breaks it.
+
+  Outside DuckLake mode, this adapter emits `DEFAULT nextval(...)` for integer primary keys. So the
+  first `create_table` locks out every later connection. Avoid this one of two ways:
+
+  - Serve a DuckLake. A DuckLake omits the default.
+  - Use `id: :uuid`. This emits no default, but then nothing generates the id, so the model must
+    generate it itself, for example with `before_create { self.id ||= SecureRandom.uuid }`.
+
+  `QuackAttachmentFailed` names the offending column when this failure happens.
 - **Bind parameters cannot be funneled**, because the funnel carries SQL as plain text. So the
   adapter forces `prepared_statements` off. It inlines values with its own quoting instead.
 - **Savepoints are unsupported**, so nested transactions do not isolate. The adapter funnels

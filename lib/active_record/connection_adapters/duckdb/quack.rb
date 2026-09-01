@@ -11,6 +11,42 @@ module ActiveRecord
       end
     end
 
+    # Raised when the ATTACH to a Quack server fails.
+    # This error gives the diagnosis for one cause that is not obvious: a computed column
+    # default anywhere on the server.
+    class QuackAttachmentFailed < ActiveRecord::ActiveRecordError
+      # @param uri [String] The server that could not be attached
+      # @param cause_message [String] First line of the underlying DuckDB error
+      # @param suspects [Array<Array>] Rows of [database, table, column, default] that may be the cause
+      def initialize(uri, cause_message, suspects = [])
+        super(<<~MESSAGE.chomp)
+          Could not attach the Quack server at #{uri}: #{cause_message}
+
+          A "Catalog does not exist" error here means a table the server serves has a computed
+          column default. Attaching binds every column default in the server's catalog: a literal
+          binds fine, one needing a function or an operator does not, and the ATTACH then fails for
+          every new connection while the one that created the table keeps working. The catalog is
+          not scoped to one database, so the table may be in one this connection never uses.
+          #{suspect_report(suspects)}
+          Drop the default on the server (ALTER TABLE <t> ALTER COLUMN <c> DROP DEFAULT) or avoid
+          creating one: this adapter emits DEFAULT nextval(...) for integer primary keys outside
+          DuckLake mode, while `id: :uuid` and literal defaults such as `default: false` are safe.
+        MESSAGE
+      end
+
+      private
+
+      # @param suspects [Array<Array>] Rows of [database, table, column, default]
+      # @return [String] A report padded with blank lines, or an empty string when there is nothing to report
+      def suspect_report(suspects)
+        return '' if suspects.empty?
+
+        listed = suspects.first(10).map { |db, table, column, default| "  #{db}.#{table}.#{column} DEFAULT #{default}" }
+        more = suspects.size > 10 ? ["  ... and #{suspects.size - 10} more"] : []
+        (["\nComputed defaults found on the server:"] + listed + more + ['']).join("\n")
+      end
+    end
+
     module Duckdb
       # Sends every statement to a DuckDB server through the Quack client/server protocol.
       #
@@ -45,6 +81,13 @@ module ActiveRecord
       #       token: <%= ENV['DUCKLAKE_QUACK_TOKEN'] %>
       #       database: ducklake
       #       disable_ssl: false # true when the server is addressed by anything but localhost
+      #
+      # No table on the server may have a *computed* column default. The ATTACH binds every
+      # column default in the server's catalog. A default that needs a function or an operator
+      # makes the ATTACH fail for good. This adapter gives every integer primary key a
+      # +DEFAULT nextval('<table>_id_seq')+. So the first create_table call outside DuckLake mode
+      # locks out every later connection. See QuackAttachmentFailed, which names the column at
+      # fault.
       module Quack
         # The name under which the server is attached. Only the funnel itself uses this name.
         ATTACHMENT = 'quack'
@@ -101,7 +144,12 @@ module ActiveRecord
         def attach_quack
           return unless quack?
 
-          raw_connection.execute(attach_quack_sql)
+          begin
+            raw_connection.execute(attach_quack_sql)
+          rescue DuckDB::Error => e
+            raise QuackAttachmentFailed.new(quack_config[:uri], e.message.lines.first.to_s.strip,
+                                            computed_default_suspects)
+          end
 
           # The attachment exposes whichever database is current in the server session. A USE
           # statement in the server's own startup script does not carry over to clients. So each
@@ -159,6 +207,56 @@ module ActiveRecord
         end
 
         private
+
+        # Column defaults on the server that may explain why the ATTACH failed.
+        #
+        # This method asks the question through quack_query. quack_query takes the server URI
+        # instead of a catalog, so it still gives an answer when ATTACH cannot. This method runs
+        # the query on the raw connection. The raw connection does not go through #log. So the
+        # token is inlined here, and it must never reach the query log. This is best effort by
+        # design. A failed probe must never hide the error that it was meant to explain.
+        #
+        # @return [Array<Array>] Rows of [database, table, column, default]
+        def computed_default_suspects
+          sql = <<~SQL.squish
+            SELECT database_name, table_name, column_name, column_default
+            FROM duckdb_columns() WHERE column_default IS NOT NULL
+          SQL
+          rows = raw_connection.query(quack_query_sql(sql)).to_a
+          rows.select { |row| computed_default?(row[3]) }
+        rescue StandardError
+          []
+        end
+
+        # Whether a stored column default needs a function or an operator to bind.
+        #
+        # DuckDB stores a boolean literal as CAST('f' AS BOOLEAN). This form binds fine. So a
+        # leading cast alone is not suspicious. This method is a hint for an error message. It
+        # is not a full parser.
+        #
+        # @param default [String, nil] The stored default expression
+        # @return [Boolean]
+        def computed_default?(default)
+          text = default.to_s.strip
+          return false if text.empty?
+          return true if text.match?(/\ACURRENT_(TIMESTAMP|DATE|TIME)\z/i)
+
+          text.include?('(') && !text.match?(/\ACAST\s*\(/i)
+        end
+
+        # A statement wrapped for quack_query. quack_query needs no attachment.
+        # @param sql [String] The statement to run on the server
+        # @return [String] The wrapping statement
+        def quack_query_sql(sql)
+          args = [quote(quack_config[:uri]), quote(sql)]
+          args << "token := #{quote(quack_config[:token])}" if quack_config[:token].present?
+          disable_ssl = quack_config[:disable_ssl]
+          unless disable_ssl.nil?
+            args << "disable_ssl := #{self.class.type_cast_config_to_boolean(disable_ssl) ? "true" : "false"}"
+          end
+
+          "SELECT * FROM quack_query(#{args.join(", ")})"
+        end
 
         # Whether a result is the row count that Quack reports back for a funneled write
         # @param raw_result [DuckDB::Result] The raw DuckDB result

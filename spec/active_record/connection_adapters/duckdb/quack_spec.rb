@@ -115,6 +115,59 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quack do
       expect(conn.prepared_statements).to be(false)
     end
 
+    describe 'the quack_query probe, which needs no attachment' do
+      it 'passes the uri, the statement and the token' do
+        expect(conn.send(:quack_query_sql, 'SELECT 1'))
+          .to eq("SELECT * FROM quack_query('quack:localhost', 'SELECT 1', token := 'secret')")
+      end
+
+      it 'escapes quotes in the statement' do
+        expect(conn.send(:quack_query_sql, "SELECT 'it''s'"))
+          .to include("'SELECT ''it''''s'''")
+      end
+
+      it 'forwards disable_ssl when configured' do
+        adapter = adapter(quack: quack_config[:quack].merge(disable_ssl: 'true'))
+        expect(adapter.send(:quack_query_sql, 'SELECT 1')).to include('disable_ssl := true')
+      end
+
+      it 'omits disable_ssl when unconfigured, so the client picks by hostname' do
+        expect(conn.send(:quack_query_sql, 'SELECT 1')).not_to include('disable_ssl')
+      end
+    end
+
+    describe 'telling a computed column default from a literal one' do
+      # Only computed defaults break the ATTACH. This was verified against DuckDB 1.5.5.
+      it 'treats literals as harmless' do
+        ['0', '-1', "'x'", "CAST('f' AS BOOLEAN)", nil, ''].each do |default|
+          expect(conn.send(:computed_default?, default)).to be(false), "expected #{default.inspect} to be harmless"
+        end
+      end
+
+      it 'flags anything needing a function or an operator' do
+        ["nextval('t_id_seq')", 'now()', 'uuid()', '(1 + 1)', 'CURRENT_TIMESTAMP', 'current_date'].each do |default|
+          expect(conn.send(:computed_default?, default)).to be(true), "expected #{default.inspect} to be flagged"
+        end
+      end
+    end
+
+    describe 'the attachment failure it reports' do
+      it 'names the offending columns and explains the escape' do
+        error = ActiveRecord::ConnectionAdapters::QuackAttachmentFailed.new(
+          'quack:localhost', 'Binder Error: Catalog "quack" does not exist!',
+          [['dbb', 'poison', 'id', "nextval('dbb.sq')"]]
+        )
+        expect(error.message).to include("dbb.poison.id DEFAULT nextval('dbb.sq')")
+        expect(error.message).to include('id: :uuid')
+      end
+
+      it 'says nothing about columns when the probe found none' do
+        error = ActiveRecord::ConnectionAdapters::QuackAttachmentFailed.new('quack:localhost', 'boom')
+        expect(error.message).to include('boom')
+        expect(error.message).not_to include('Computed defaults found')
+      end
+    end
+
     it 'refuses bind parameters instead of dropping them' do
       expect { conn.quack_sql('SELECT ?', [1]) }
         .to raise_error(ActiveRecord::ConnectionAdapters::QuackBindParametersNotSupported,
