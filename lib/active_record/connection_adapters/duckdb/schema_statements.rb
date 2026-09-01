@@ -55,7 +55,11 @@ module ActiveRecord
           sequence_name = nil
           pk_column_name = nil
           needs_sequence_default = false
-          if id != false && id != :uuid && id != :string
+          # Skip sequence creation in DuckLake mode. DuckLake does not support sequences.
+          # It answers a create attempt with "Not implemented Error: DuckLake does not
+          # support sequences". Before this check, #create_sequence_safely caught that
+          # error once per table.
+          if id != false && id != :uuid && id != :string && !ducklake?
             pk_column_name = primary_key || 'id'
             sequence_name = "#{table_name}_#{pk_column_name}_seq"
             needs_sequence_default = true

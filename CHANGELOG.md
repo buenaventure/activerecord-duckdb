@@ -25,6 +25,10 @@
   `nextval()` on every call. DuckDB does not roll a sequence back. So, before this fix, a table
   recreated with `force: true` started at id 2.
 - Fix `sequences`. It now returns the current database's sequences, instead of always `[]`.
+- Fix `create_table` with an explicit `id:` type (`:uuid`, `:string`, `:bigint`, `:integer`) in
+  DuckLake mode. Before this fix, only the default `id` type omitted the `PRIMARY KEY` constraint
+  that DuckLake rejects. DuckLake tables also no longer attempt to create the sequence that DuckLake
+  cannot create.
 
 ## [0.1.0] - 2025-06-18
 

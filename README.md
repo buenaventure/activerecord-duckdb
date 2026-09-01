@@ -233,6 +233,32 @@ development:
 
 When using DuckLake with a Postgres backend (`connection_string: 'ducklake:postgres:'` and `secrets.postgres`), `rails db:create` and `rails db:drop` will **also** create and drop the PostgreSQL database **if the `pg` gem is installed**. If the `pg` gem is not present, the Postgres database is not created or dropped (no error); create or drop it manually or add `pg` to your Gemfile.
 
+#### DuckLake and primary keys
+
+DuckLake has no indexes. So it has no primary key constraints, no foreign key constraints, and no
+sequences. Tables get an `id` column with no constraint and no default. Every insert sets
+`id = NULL`, and `Model.primary_key` is `nil`.
+
+Bulk and analytical operations work: insert, scan, aggregate, `update_all`, `delete_all`, `pluck`,
+and `find_by`. `find`, `record.update`, `record.reload`, `record.destroy`, and associations do not
+work. Each of these names the reason when it fails.
+
+For per-record persistence, supply the id from the application:
+
+```ruby
+create_table :widgets, id: :uuid do |t|
+  t.string :name
+end
+
+class Widget < ApplicationRecord
+  self.primary_key = 'id'
+  before_create { self.id ||= SecureRandom.uuid }
+end
+```
+
+From there, `find`, `update`, `reload`, `destroy`, and associations all work. You must set
+`self.primary_key` by hand: the table carries no constraint for the adapter to report.
+
 ### Sample App setup
 
 The following steps are required to setup a sample application using the `activerecord-duckdb` gem:

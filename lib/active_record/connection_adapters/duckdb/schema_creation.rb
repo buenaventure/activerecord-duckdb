@@ -34,6 +34,13 @@ module ActiveRecord
             options = options.except(:default)
           end
 
+          # DuckLake rejects a PRIMARY KEY column constraint. #primary_key_type_definition
+          # omits this constraint, but only for the :primary_key column type. An explicit
+          # +id:+ type takes Rails' ordinary column path instead. That path emits the
+          # constraint from the :primary_key option. This line drops the constraint here,
+          # so both paths agree.
+          options = options.except(:primary_key) if options[:primary_key] && @conn.ducklake?
+
           # Let Rails handle all other column options normally
           super
         end

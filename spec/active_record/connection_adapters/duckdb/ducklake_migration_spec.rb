@@ -3,6 +3,7 @@
 require 'spec_helper'
 require 'tmpdir'
 require 'fileutils'
+require 'securerandom'
 
 # DuckLake Migration Tests
 #
@@ -266,6 +267,104 @@ RSpec.describe 'DuckLake Migrations' do
         # Drop
         connection.drop_table(:workflow_test)
         expect(connection.table_exists?(:workflow_test)).to be false
+      end
+    end
+
+    # DuckLake has no indexes. It also has no PRIMARY KEY constraint.
+    # The adapter omits the constraint for the default id column.
+    # An explicit +id:+ type takes a different route: Rails' ordinary column path.
+    # That path adds the constraint from the :primary_key column option.
+    # DuckLake then rejects the whole CREATE TABLE statement.
+    describe 'explicit primary key types' do
+      %i[uuid string bigint integer].each do |id_type|
+        it "creates a table with id: :#{id_type} and no PRIMARY KEY constraint" do
+          expect { connection.create_table(:keyed, id: id_type) { |t| t.string :name } }
+            .not_to raise_error
+
+          expect(connection.table_exists?(:keyed)).to be true
+          expect(connection.primary_keys(:keyed)).to be_empty
+          expect(connection.columns(:keyed).map(&:name)).to include('id')
+        end
+      end
+
+      # DuckLake also has no sequences ("Not implemented Error: DuckLake does not support
+      # sequences"). So nothing populates the column. The application must populate it.
+      it 'leaves the id column without a default' do
+        connection.create_table(:keyed, id: :uuid) { |t| t.string :name }
+
+        id_column = connection.columns(:keyed).find { |column| column.name == 'id' }
+        expect(id_column.default).to be_nil
+        expect(id_column.default_function).to be_nil
+      end
+
+      it 'creates no sequence for the table' do
+        connection.create_table(:keyed) { |t| t.string :name }
+
+        expect(connection.sequences).to be_empty
+      end
+    end
+
+    # With no primary key, ActiveRecord quotes the nil key name into `WHERE "" = ...`. The database
+    # answers with `Parser Error: zero-length delimited identifier`. This message names neither the
+    # table nor the cause. So the adapter refuses the empty identifier instead. It then reports what
+    # to do.
+    describe 'records in a table with no primary key' do
+      let(:model) do
+        connection.create_table(:notes, force: true) { |t| t.string :body }
+        Class.new(ActiveRecord::Base) do
+          self.table_name = 'notes'
+          def self.name = 'Note'
+        end
+      end
+
+      it 'reports no primary key' do
+        expect(model.primary_key).to be_nil
+      end
+
+      it 'still inserts, scans and updates as a set' do
+        model.create!(body: 'a')
+        model.create!(body: 'b')
+
+        expect(model.count).to eq(2)
+        expect(model.update_all(body: 'c')).to eq(2)
+        expect(model.pluck(:body)).to eq(%w[c c])
+        expect(model.delete_all).to eq(2)
+      end
+
+      %i[update reload destroy].each do |action|
+        it "raises a message naming the missing primary key on ##{action}" do
+          record = model.create!(body: 'a')
+          call = action == :update ? -> { record.update!(body: 'b') } : -> { record.public_send(action) }
+
+          expect(&call).to raise_error(ActiveRecord::ActiveRecordError, /no primary key/)
+        end
+      end
+    end
+
+    # An application-supplied id column gives per-record persistence in a lake. Quack mode needs the
+    # same escape.
+    describe 'an application-supplied primary key' do
+      let(:model) do
+        connection.create_table(:widgets, id: :uuid, force: true) { |t| t.string :name }
+        Class.new(ActiveRecord::Base) do
+          self.table_name = 'widgets'
+          self.primary_key = 'id'
+          def self.name = 'Widget'
+
+          before_create { self.id ||= SecureRandom.uuid }
+        end
+      end
+
+      it 'supports find, update, reload and destroy' do
+        record = model.create!(name: 'a')
+        expect(record.id).to be_present
+
+        record.update!(name: 'b')
+        expect(model.find(record.id).name).to eq('b')
+        expect(record.reload.name).to eq('b')
+
+        record.destroy
+        expect(model.count).to eq(0)
       end
     end
   end
