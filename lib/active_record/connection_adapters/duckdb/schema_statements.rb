@@ -320,7 +320,13 @@ module ActiveRecord
         def indexes(table_name)
           indexes = []
           begin
-            result = execute("SELECT * FROM duckdb_indexes() WHERE table_name = #{quote(table_name.to_s)}", 'SCHEMA')
+            # This filters by database_name for the same reason as #data_source_sql.
+            # duckdb_indexes() lists indexes from every attached database.
+            result = execute(
+              'SELECT * FROM duckdb_indexes() ' \
+              "WHERE database_name = current_database() AND table_name = #{quote(table_name.to_s)}",
+              'SCHEMA'
+            )
             # Store result as array immediately to avoid consumption issues
             result_array = result.to_a
             result_array.each_with_index do |index_row, _idx|
@@ -368,6 +374,10 @@ module ActiveRecord
           sql = 'SELECT table_name FROM information_schema.tables'
 
           conditions = []
+          # information_schema spans every attached database. Without this condition, the
+          # tables of one attachment appear under another's name. table_exists? then
+          # answers for the wrong database.
+          conditions << 'table_catalog = current_database()'
           conditions << "table_schema = #{scope[:schema]}" if scope[:schema]
           conditions << "table_name = #{scope[:name]}" if scope[:name]
           conditions << scope[:type] if scope[:type] # This now contains the full condition
