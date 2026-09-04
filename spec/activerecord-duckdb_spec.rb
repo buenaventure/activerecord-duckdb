@@ -52,7 +52,7 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
 
       it 'creates and connects to a file database' do
         ActiveRecord::Base.establish_connection(config)
-        ActiveRecord::Base.connection.execute('SELECT 1') # Trigger database creation
+        ActiveRecord::Base.connection.execute('SELECT 1') # This triggers database creation
 
         expect(File).to exist(temp_db_path)
       end
@@ -63,14 +63,14 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
     before do
       ActiveRecord::Base.establish_connection(adapter: 'duckdb', database: ':memory:')
 
-      # Ensure clean slate - drop table if it exists
+      # Drop the table first, if it exists. This gives a clean slate for the test.
       begin
         ActiveRecord::Base.connection.drop_table(:test_users)
       rescue ActiveRecord::StatementInvalid, DuckDB::Error
-        # Ignore if table doesn't exist
+        # Ignore the error if the table does not exist.
       end
 
-      # Create table using Rails migration syntax
+      # Create the table using Rails migration syntax.
       ActiveRecord::Base.connection.create_table(:test_users, force: true) do |t|
         t.string :name, null: false
         t.integer :age
@@ -80,11 +80,11 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
     end
 
     after do
-      # Clean up table and connection
+      # Clean up the table and the connection.
       begin
         ActiveRecord::Base.connection.drop_table(:test_users) if ActiveRecord::Base.connection.table_exists?(:test_users)
       rescue ActiveRecord::StatementInvalid, DuckDB::Error
-        # Ignore cleanup errors
+        # Ignore any cleanup errors.
       end
       ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?
     end
@@ -135,7 +135,7 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
       end
 
       it 'validates model constraints' do
-        invalid_user = user_class.new # Missing required name
+        invalid_user = user_class.new # The name is missing
 
         expect(invalid_user).not_to be_valid
         expect(invalid_user.errors[:name]).to include("can't be blank")
@@ -144,10 +144,10 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
 
     describe 'query operations' do
       before do
-        # Clear any existing data
+        # Clear any existing data.
         user_class.delete_all
 
-        # Create test data
+        # Create test data.
         user_class.create!(name: 'Active User', age: 25, active: true)
         user_class.create!(name: 'Inactive User', age: 30, active: false)
         user_class.create!(name: 'Another Active', age: 35, active: true)
@@ -208,14 +208,14 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
     end
 
     it 'supports different primary key types' do
-      # Default bigint primary key
+      # The default primary key uses bigint.
       ActiveRecord::Base.connection.create_table(:default_pk) do |t|
         t.string :name
       end
       default_id = ActiveRecord::Base.connection.columns(:default_pk).find { |c| c.name == 'id' }
       expect(default_id.type).to eq(:bigint)
 
-      # UUID primary key
+      # A UUID primary key
       ActiveRecord::Base.connection.create_table(:uuid_pk, id: :uuid) do |t|
         t.string :name
       end

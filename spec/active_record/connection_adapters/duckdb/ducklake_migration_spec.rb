@@ -7,11 +7,11 @@ require 'securerandom'
 
 # DuckLake Migration Tests
 #
-# These tests verify that Rails migrations can be used to create DuckLake tables
-# with all supported column types, including DuckDB-specific types like unsigned integers.
+# These tests check that Rails migrations create DuckLake tables.
+# The tables must support all column types, including DuckDB-specific types like unsigned integers.
 
 RSpec.describe 'DuckLake Migrations' do
-  # Helper to build DuckLake configuration with local storage
+  # Build a DuckLake configuration that uses local storage.
   def ducklake_config(temp_dir)
     {
       adapter: 'duckdb',
@@ -41,7 +41,7 @@ RSpec.describe 'DuckLake Migrations' do
     end
 
     describe 'comprehensive column types table' do
-      # This test creates a table with one example of each supported column type
+      # This test creates a table with one example of each supported column type.
       before do
         connection.create_table(:all_types, id: false) do |t|
           # Standard Rails types
@@ -54,11 +54,11 @@ RSpec.describe 'DuckLake Migrations' do
           t.decimal :amount, precision: 10, scale: 2
           t.decimal :coordinates, precision: 9, scale: 6
 
-          # DuckDB signed integer types
+          # Signed integer types in DuckDB
           t.tinyint :tiny_val
           t.smallint :small_val
 
-          # DuckDB unsigned integer types
+          # Unsigned integer types in DuckDB
           t.utinyint :unsigned_tiny
           t.usmallint :unsigned_small
           t.uinteger :unsigned_int
@@ -109,7 +109,7 @@ RSpec.describe 'DuckLake Migrations' do
           end
         end
 
-        # DuckDB signed integer types
+        # Signed integer types in DuckDB
         it 'maps tiny_val to TINYINT' do
           col = columns_by_name['tiny_val']
           expect(col.sql_type.upcase).to eq('TINYINT')
@@ -120,7 +120,7 @@ RSpec.describe 'DuckLake Migrations' do
           expect(col.sql_type.upcase).to eq('SMALLINT')
         end
 
-        # DuckDB unsigned integer types
+        # Unsigned integer types in DuckDB
         {
           'unsigned_tiny' => 'UTINYINT',
           'unsigned_small' => 'USMALLINT',
@@ -168,8 +168,9 @@ RSpec.describe 'DuckLake Migrations' do
         expect(connection.table_exists?(:events)).to be true
       end
 
-      # Note: DuckLake does not support removing partitioning after it has been set.
-      # Partitioning is a one-way operation. To change partitioning, you must recreate the table.
+      # Note: DuckLake does not support removal of partitioning after you set it.
+      # Partitioning is a one-way operation.
+      # To change partitioning, recreate the table.
 
       it 'reflects partitioning in schema dumps' do
         connection.set_partitioned_by(
@@ -183,7 +184,7 @@ RSpec.describe 'DuckLake Migrations' do
         ActiveRecord::SchemaDumper.dump(ActiveRecord::Base.connection_pool, stream)
         schema = stream.string
 
-        # Schema should include the partition expressions
+        # The dumped schema includes the partition expressions.
         expect(schema).to include('set_partitioned_by "events"')
         expect(schema).to include('year(occurred_at)')
         expect(schema).to include('month(occurred_at)')
@@ -201,7 +202,7 @@ RSpec.describe 'DuckLake Migrations' do
     end
 
     describe 'type_to_sql conversions' do
-      # Test that type_to_sql correctly converts Rails types to DuckDB SQL types
+      # Check that type_to_sql converts each Rails type to the correct DuckDB SQL type.
       {
         bigint: 'BIGINT',
         integer: 'INTEGER',
