@@ -102,14 +102,11 @@ module ActiveRecord
           current = migration_context.current_environment
           stored = migration_context.last_stored_environment
 
-          if migration_context.protected_environment?
-            raise ActiveRecord::ProtectedEnvironmentError.new(stored)
-          end
+          raise ActiveRecord::ProtectedEnvironmentError, stored if migration_context.protected_environment?
 
-          if stored && stored != current
-            raise ActiveRecord::EnvironmentMismatchError.new(current: current, stored: stored)
-          end
+          raise ActiveRecord::EnvironmentMismatchError.new(current: current, stored: stored) if stored && stored != current
         rescue ActiveRecord::NoDatabaseError
+          # No database yet, so there is no stored environment to protect.
         end
       end
 

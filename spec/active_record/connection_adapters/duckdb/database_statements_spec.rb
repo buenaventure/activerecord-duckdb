@@ -16,12 +16,13 @@ require 'spec_helper'
 # 8. exec_insert → handled by Rails base class via sql_for_insert
 
 RSpec.describe 'DatabaseStatements' do
+  let(:connection) { ActiveRecord::Base.connection }
+
   before do
     ActiveRecord::Base.establish_connection(adapter: 'duckdb', database: ':memory:')
-    @connection = ActiveRecord::Base.connection
 
     # Create test table
-    @connection.execute(<<~SQL)
+    connection.execute(<<~SQL)
       CREATE TABLE statement_test (
         id INTEGER PRIMARY KEY,
         name VARCHAR,
@@ -31,46 +32,50 @@ RSpec.describe 'DatabaseStatements' do
     SQL
 
     # Insert test data
-    @connection.execute("INSERT INTO statement_test VALUES (1, 'Alice', 25, true)")
-    @connection.execute("INSERT INTO statement_test VALUES (2, 'Bob', 30, false)")
-    @connection.execute("INSERT INTO statement_test VALUES (3, 'Charlie', 35, true)")
+    connection.execute("INSERT INTO statement_test VALUES (1, 'Alice', 25, true)")
+    connection.execute("INSERT INTO statement_test VALUES (2, 'Bob', 30, false)")
+    connection.execute("INSERT INTO statement_test VALUES (3, 'Charlie', 35, true)")
   end
 
   after do
-    @connection.execute('DROP TABLE IF EXISTS statement_test') rescue nil
+    begin
+      connection.execute('DROP TABLE IF EXISTS statement_test')
+    rescue StandardError
+      nil
+    end
     ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?
   end
 
   describe '#execute' do
     it 'returns a DuckDB::Result for SELECT queries' do
-      result = @connection.execute('SELECT * FROM statement_test')
+      result = connection.execute('SELECT * FROM statement_test')
 
       expect(result).to be_a(DuckDB::Result)
       expect(result.to_a.length).to eq(3)
     end
 
     it 'returns a DuckDB::Result for INSERT queries' do
-      result = @connection.execute("INSERT INTO statement_test VALUES (4, 'Diana', 28, true)")
+      result = connection.execute("INSERT INTO statement_test VALUES (4, 'Diana', 28, true)")
 
       expect(result).to be_a(DuckDB::Result)
     end
 
     it 'returns a DuckDB::Result for UPDATE queries' do
-      result = @connection.execute("UPDATE statement_test SET age = 26 WHERE name = 'Alice'")
+      result = connection.execute("UPDATE statement_test SET age = 26 WHERE name = 'Alice'")
 
       expect(result).to be_a(DuckDB::Result)
       expect(result.rows_changed).to eq(1)
     end
 
     it 'returns a DuckDB::Result for DELETE queries' do
-      result = @connection.execute("DELETE FROM statement_test WHERE name = 'Alice'")
+      result = connection.execute("DELETE FROM statement_test WHERE name = 'Alice'")
 
       expect(result).to be_a(DuckDB::Result)
       expect(result.rows_changed).to eq(1)
     end
 
     it 'handles queries with no results' do
-      result = @connection.execute('SELECT * FROM statement_test WHERE id = 999')
+      result = connection.execute('SELECT * FROM statement_test WHERE id = 999')
 
       expect(result).to be_a(DuckDB::Result)
       expect(result.to_a).to be_empty
@@ -79,7 +84,7 @@ RSpec.describe 'DatabaseStatements' do
 
   describe '#internal_exec_query' do
     it 'returns an ActiveRecord::Result' do
-      result = @connection.internal_exec_query('SELECT * FROM statement_test')
+      result = connection.internal_exec_query('SELECT * FROM statement_test')
 
       expect(result).to be_a(ActiveRecord::Result)
       expect(result.columns).to include('id', 'name', 'age', 'active')
@@ -87,14 +92,14 @@ RSpec.describe 'DatabaseStatements' do
     end
 
     it 'executes queries without bind parameters' do
-      result = @connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
+      result = connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
 
       expect(result.rows.first).to eq(['Alice'])
     end
 
     it 'executes queries with bind parameters' do
       bind = ActiveRecord::Relation::QueryAttribute.new('id', 1, ActiveRecord::Type::Integer.new)
-      result = @connection.internal_exec_query(
+      result = connection.internal_exec_query(
         'SELECT name FROM statement_test WHERE id = ?',
         'SQL',
         [bind]
@@ -108,7 +113,7 @@ RSpec.describe 'DatabaseStatements' do
         ActiveRecord::Relation::QueryAttribute.new('age', 25, ActiveRecord::Type::Integer.new),
         ActiveRecord::Relation::QueryAttribute.new('active', true, ActiveRecord::Type::Boolean.new)
       ]
-      result = @connection.internal_exec_query(
+      result = connection.internal_exec_query(
         'SELECT name FROM statement_test WHERE age >= ? AND active = ?',
         'SQL',
         binds
@@ -128,7 +133,7 @@ RSpec.describe 'DatabaseStatements' do
       # materialize_transactions was added in Rails 8.1
       kwargs[:materialize_transactions] = true if ActiveRecord::VERSION::MAJOR >= 8
 
-      result = @connection.internal_exec_query('SELECT 1', 'SQL', [], **kwargs)
+      result = connection.internal_exec_query('SELECT 1', 'SQL', [], **kwargs)
 
       expect(result).to be_a(ActiveRecord::Result)
     end
@@ -136,8 +141,8 @@ RSpec.describe 'DatabaseStatements' do
 
   describe '#cast_result' do
     it 'converts DuckDB::Result to ActiveRecord::Result' do
-      raw_result = @connection.execute('SELECT id, name FROM statement_test LIMIT 1')
-      result = @connection.cast_result(raw_result)
+      raw_result = connection.execute('SELECT id, name FROM statement_test LIMIT 1')
+      result = connection.cast_result(raw_result)
 
       expect(result).to be_a(ActiveRecord::Result)
       expect(result.columns).to eq(%w[id name])
@@ -145,23 +150,23 @@ RSpec.describe 'DatabaseStatements' do
     end
 
     it 'handles empty results' do
-      raw_result = @connection.execute('SELECT * FROM statement_test WHERE id = 999')
-      result = @connection.cast_result(raw_result)
+      raw_result = connection.execute('SELECT * FROM statement_test WHERE id = 999')
+      result = connection.cast_result(raw_result)
 
       expect(result).to be_a(ActiveRecord::Result)
       expect(result.rows).to be_empty
     end
 
     it 'handles nil input' do
-      result = @connection.cast_result(nil)
+      result = connection.cast_result(nil)
 
       expect(result).to be_a(ActiveRecord::Result)
       expect(result).to be_empty
     end
 
     it 'preserves column names from result' do
-      raw_result = @connection.execute('SELECT id AS user_id, name AS user_name FROM statement_test')
-      result = @connection.cast_result(raw_result)
+      raw_result = connection.execute('SELECT id AS user_id, name AS user_name FROM statement_test')
+      result = connection.cast_result(raw_result)
 
       expect(result.columns).to eq(%w[user_id user_name])
     end
@@ -169,46 +174,46 @@ RSpec.describe 'DatabaseStatements' do
 
   describe '#affected_rows' do
     it 'returns the number of rows changed for UPDATE' do
-      raw_result = @connection.execute("UPDATE statement_test SET age = age + 1 WHERE active = true")
+      raw_result = connection.execute('UPDATE statement_test SET age = age + 1 WHERE active = true')
 
-      expect(@connection.affected_rows(raw_result)).to eq(2)
+      expect(connection.affected_rows(raw_result)).to eq(2)
     end
 
     it 'returns the number of rows changed for DELETE' do
-      raw_result = @connection.execute("DELETE FROM statement_test WHERE active = false")
+      raw_result = connection.execute('DELETE FROM statement_test WHERE active = false')
 
-      expect(@connection.affected_rows(raw_result)).to eq(1)
+      expect(connection.affected_rows(raw_result)).to eq(1)
     end
 
     it 'returns 0 when no rows are affected' do
-      raw_result = @connection.execute("UPDATE statement_test SET age = 99 WHERE id = 999")
+      raw_result = connection.execute('UPDATE statement_test SET age = 99 WHERE id = 999')
 
-      expect(@connection.affected_rows(raw_result)).to eq(0)
+      expect(connection.affected_rows(raw_result)).to eq(0)
     end
   end
 
   describe '#exec_delete' do
     it 'returns the number of deleted rows' do
-      count = @connection.exec_delete("DELETE FROM statement_test WHERE name = 'Alice'")
+      count = connection.exec_delete("DELETE FROM statement_test WHERE name = 'Alice'")
 
       expect(count).to eq(1)
     end
 
     it 'handles deletion of multiple rows' do
-      count = @connection.exec_delete('DELETE FROM statement_test WHERE active = true')
+      count = connection.exec_delete('DELETE FROM statement_test WHERE active = true')
 
       expect(count).to eq(2)
     end
 
     it 'returns 0 when no rows match' do
-      count = @connection.exec_delete('DELETE FROM statement_test WHERE id = 999')
+      count = connection.exec_delete('DELETE FROM statement_test WHERE id = 999')
 
       expect(count).to eq(0)
     end
 
     it 'works with bind parameters' do
       bind = ActiveRecord::Relation::QueryAttribute.new('name', 'Bob', ActiveRecord::Type::String.new)
-      count = @connection.exec_delete('DELETE FROM statement_test WHERE name = ?', 'SQL', [bind])
+      count = connection.exec_delete('DELETE FROM statement_test WHERE name = ?', 'SQL', [bind])
 
       expect(count).to eq(1)
     end
@@ -218,7 +223,7 @@ RSpec.describe 'DatabaseStatements' do
         ActiveRecord::Relation::QueryAttribute.new('age', 30, ActiveRecord::Type::Integer.new),
         ActiveRecord::Relation::QueryAttribute.new('active', false, ActiveRecord::Type::Boolean.new)
       ]
-      count = @connection.exec_delete('DELETE FROM statement_test WHERE age >= ? AND active = ?', 'SQL', binds)
+      count = connection.exec_delete('DELETE FROM statement_test WHERE age >= ? AND active = ?', 'SQL', binds)
 
       expect(count).to eq(1) # Only Bob (30, false)
     end
@@ -229,18 +234,18 @@ RSpec.describe 'DatabaseStatements' do
       # In Rails 7.2, exec_update is an alias for exec_delete in our adapter
       # In Rails 8.0+, they're separate methods in the base class but behave identically
       if ActiveRecord::VERSION::MAJOR < 8
-        expect(@connection.method(:exec_update)).to eq(@connection.method(:exec_delete))
+        expect(connection.method(:exec_update)).to eq(connection.method(:exec_delete))
       else
         # Both should return integer row counts
-        delete_result = @connection.exec_delete("DELETE FROM statement_test WHERE name = 'NonExistent'")
-        update_result = @connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'NonExistent'")
+        delete_result = connection.exec_delete("DELETE FROM statement_test WHERE name = 'NonExistent'")
+        update_result = connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'NonExistent'")
         expect(delete_result).to eq(0)
         expect(update_result).to eq(0)
       end
     end
 
     it 'returns the number of updated rows' do
-      count = @connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'Alice'")
+      count = connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'Alice'")
 
       expect(count).to eq(1)
     end
@@ -250,12 +255,12 @@ RSpec.describe 'DatabaseStatements' do
         ActiveRecord::Relation::QueryAttribute.new('new_age', 50, ActiveRecord::Type::Integer.new),
         ActiveRecord::Relation::QueryAttribute.new('name', 'Alice', ActiveRecord::Type::String.new)
       ]
-      count = @connection.exec_update('UPDATE statement_test SET age = ? WHERE name = ?', 'SQL', binds)
+      count = connection.exec_update('UPDATE statement_test SET age = ? WHERE name = ?', 'SQL', binds)
 
       expect(count).to eq(1)
 
       # Verify the update worked
-      result = @connection.internal_exec_query("SELECT age FROM statement_test WHERE name = 'Alice'")
+      result = connection.internal_exec_query("SELECT age FROM statement_test WHERE name = 'Alice'")
       expect(result.rows.first.first).to eq(50)
     end
   end
@@ -263,7 +268,7 @@ RSpec.describe 'DatabaseStatements' do
   describe 'Rails base class delegation' do
     describe '#exec_query' do
       it 'delegates to internal_exec_query and returns ActiveRecord::Result' do
-        result = @connection.exec_query('SELECT * FROM statement_test')
+        result = connection.exec_query('SELECT * FROM statement_test')
 
         expect(result).to be_a(ActiveRecord::Result)
         expect(result.rows.length).to eq(3)
@@ -271,7 +276,7 @@ RSpec.describe 'DatabaseStatements' do
 
       it 'works with bind parameters' do
         bind = ActiveRecord::Relation::QueryAttribute.new('id', 2, ActiveRecord::Type::Integer.new)
-        result = @connection.exec_query('SELECT name FROM statement_test WHERE id = ?', 'SQL', [bind])
+        result = connection.exec_query('SELECT name FROM statement_test WHERE id = ?', 'SQL', [bind])
 
         expect(result.rows.first).to eq(['Bob'])
       end
@@ -279,7 +284,7 @@ RSpec.describe 'DatabaseStatements' do
 
     describe '#exec_insert' do
       it 'inserts records and returns the result with RETURNING' do
-        result = @connection.exec_insert(
+        result = connection.exec_insert(
           "INSERT INTO statement_test (id, name, age, active) VALUES (4, 'Diana', 28, true)",
           'SQL',
           [],
@@ -298,7 +303,7 @@ RSpec.describe 'DatabaseStatements' do
           ActiveRecord::Relation::QueryAttribute.new('age', 32, ActiveRecord::Type::Integer.new),
           ActiveRecord::Relation::QueryAttribute.new('active', true, ActiveRecord::Type::Boolean.new)
         ]
-        result = @connection.exec_insert(
+        result = connection.exec_insert(
           'INSERT INTO statement_test (id, name, age, active) VALUES (?, ?, ?, ?)',
           'SQL',
           binds,
@@ -384,13 +389,13 @@ RSpec.describe 'DatabaseStatements' do
 
   describe 'edge cases and error handling' do
     it 'handles queries returning many columns' do
-      result = @connection.internal_exec_query('SELECT id, name, age, active FROM statement_test')
+      result = connection.internal_exec_query('SELECT id, name, age, active FROM statement_test')
 
       expect(result.columns.length).to eq(4)
     end
 
     it 'handles queries with aliases' do
-      result = @connection.internal_exec_query(
+      result = connection.internal_exec_query(
         'SELECT id AS user_id, name AS username FROM statement_test'
       )
 
@@ -398,25 +403,25 @@ RSpec.describe 'DatabaseStatements' do
     end
 
     it 'handles NULL values' do
-      @connection.execute("INSERT INTO statement_test VALUES (100, NULL, NULL, NULL)")
+      connection.execute('INSERT INTO statement_test VALUES (100, NULL, NULL, NULL)')
 
-      result = @connection.internal_exec_query('SELECT * FROM statement_test WHERE id = 100')
+      result = connection.internal_exec_query('SELECT * FROM statement_test WHERE id = 100')
 
       expect(result.rows.first).to eq([100, nil, nil, nil])
     end
 
     it 'handles special characters in string values' do
-      @connection.execute("INSERT INTO statement_test VALUES (101, 'O''Brien', 45, true)")
+      connection.execute("INSERT INTO statement_test VALUES (101, 'O''Brien', 45, true)")
 
-      result = @connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 101')
+      result = connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 101')
 
       expect(result.rows.first.first).to eq("O'Brien")
     end
 
     it 'raises error for invalid SQL' do
-      expect {
-        @connection.execute('INVALID SQL')
-      }.to raise_error(ActiveRecord::StatementInvalid)
+      expect do
+        connection.execute('INVALID SQL')
+      end.to raise_error(ActiveRecord::StatementInvalid)
     end
   end
 
@@ -425,25 +430,25 @@ RSpec.describe 'DatabaseStatements' do
   # 8.0's check_if_write_query asked write_query? first. Both execute paths here hand the guard
   # every statement, so reads have to stay allowed on a connection that prevents writes.
   describe 'readonly connections' do
-    # `around` runs before the outer `before`, so @connection is not set yet - each example wraps
+    # `around` runs before the outer `before`, so connection is not set yet - each example wraps
     # its own statement instead. The switch lives on the model class, not on the adapter.
     def preventing_writes(&) = ActiveRecord::Base.while_preventing_writes(true, &)
 
     it 'allows a SELECT' do
-      result = preventing_writes { @connection.execute('SELECT * FROM statement_test') }
+      result = preventing_writes { connection.execute('SELECT * FROM statement_test') }
 
       expect(result.to_a.length).to eq(3)
     end
 
     it 'allows a PRAGMA, which schema reflection needs' do
-      result = preventing_writes { @connection.execute("PRAGMA table_info('statement_test')") }
+      result = preventing_writes { connection.execute("PRAGMA table_info('statement_test')") }
 
       expect(result.to_a).not_to be_empty
     end
 
     it 'allows a SELECT through internal_exec_query' do
       result = preventing_writes do
-        @connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
+        connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
       end
 
       expect(result.rows.first.first).to eq('Alice')
@@ -451,19 +456,19 @@ RSpec.describe 'DatabaseStatements' do
 
     it 'rejects an INSERT' do
       expect do
-        preventing_writes { @connection.execute("INSERT INTO statement_test VALUES (5, 'Eve', 22, true)") }
+        preventing_writes { connection.execute("INSERT INTO statement_test VALUES (5, 'Eve', 22, true)") }
       end.to raise_error(ActiveRecord::ReadOnlyError)
     end
 
     it 'rejects an UPDATE' do
       expect do
-        preventing_writes { @connection.execute('UPDATE statement_test SET age = 99') }
+        preventing_writes { connection.execute('UPDATE statement_test SET age = 99') }
       end.to raise_error(ActiveRecord::ReadOnlyError)
     end
 
     it 'rejects a DELETE' do
       expect do
-        preventing_writes { @connection.execute('DELETE FROM statement_test') }
+        preventing_writes { connection.execute('DELETE FROM statement_test') }
       end.to raise_error(ActiveRecord::ReadOnlyError)
     end
   end

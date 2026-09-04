@@ -31,43 +31,47 @@ RSpec.describe ActiveRecord::ConnectionAdapters::DuckdbAdapter do
   end
 
   describe 'connection via establish_connection (Rails integration)' do
-    # Define a named test model for establish_connection tests
-    class self::TestDuckdbModel < ActiveRecord::Base
-      self.abstract_class = true
+    # establish_connection refuses an anonymous class, so the test model needs
+    # a real constant. stub_const scopes it to the example instead of leaking
+    # it onto the global constant table.
+    let(:test_model_class) { TestDuckdbModel }
+
+    before do
+      stub_const('TestDuckdbModel', Class.new(ActiveRecord::Base) { self.abstract_class = true })
     end
 
     after do
-      self.class::TestDuckdbModel.remove_connection if self.class::TestDuckdbModel.connected?
+      test_model_class.remove_connection if test_model_class.connected?
     end
 
     it 'applies default settings when using establish_connection' do
-      self.class::TestDuckdbModel.establish_connection(
+      test_model_class.establish_connection(
         adapter: 'duckdb',
         database: ':memory:'
       )
 
-      conn = self.class::TestDuckdbModel.connection
+      conn = test_model_class.connection
       expect(query_value("SELECT value FROM duckdb_settings() WHERE name = 'threads'", connection: conn).to_i).to eq(1)
     end
 
     it 'applies custom settings when using establish_connection' do
-      self.class::TestDuckdbModel.establish_connection(
+      test_model_class.establish_connection(
         adapter: 'duckdb',
         database: ':memory:',
         settings: { threads: 8 }
       )
 
-      conn = self.class::TestDuckdbModel.connection
+      conn = test_model_class.connection
       expect(query_value("SELECT value FROM duckdb_settings() WHERE name = 'threads'", connection: conn).to_i).to eq(8)
     end
 
     it 'locks configuration when using establish_connection' do
-      self.class::TestDuckdbModel.establish_connection(
+      test_model_class.establish_connection(
         adapter: 'duckdb',
         database: ':memory:'
       )
 
-      conn = self.class::TestDuckdbModel.connection
+      conn = test_model_class.connection
       expect(query_value("SELECT value FROM duckdb_settings() WHERE name = 'lock_configuration'", connection: conn)).to eq('true')
     end
   end

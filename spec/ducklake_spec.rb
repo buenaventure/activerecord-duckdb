@@ -250,6 +250,16 @@ RSpec.describe 'DuckLake Integration' do
 
   describe 'ActiveRecord model operations with DuckLake' do
     let(:temp_dir) { Dir.mktmpdir('ducklake_model_test') }
+    let(:user_class) do
+      Class.new(ActiveRecord::Base) do
+        self.table_name = 'ducklake_users'
+        self.primary_key = 'id'
+
+        def self.name
+          'DucklakeUser'
+        end
+      end
+    end
 
     before do
       FileUtils.mkdir_p(File.join(temp_dir, 'data'))
@@ -276,17 +286,6 @@ RSpec.describe 'DuckLake Integration' do
       end
       ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?
       FileUtils.rm_rf(temp_dir)
-    end
-
-    let(:user_class) do
-      Class.new(ActiveRecord::Base) do
-        self.table_name = 'ducklake_users'
-        self.primary_key = 'id'
-
-        def self.name
-          'DucklakeUser'
-        end
-      end
     end
 
     describe 'read operations' do
@@ -416,6 +415,16 @@ RSpec.describe 'DuckLake Integration' do
 
   describe 'query operations' do
     let(:temp_dir) { Dir.mktmpdir('ducklake_query_test') }
+    let(:user_class) do
+      Class.new(ActiveRecord::Base) do
+        self.table_name = 'query_users'
+        self.primary_key = 'id'
+
+        def self.name
+          'QueryUser'
+        end
+      end
+    end
 
     before do
       FileUtils.mkdir_p(File.join(temp_dir, 'data'))
@@ -433,6 +442,13 @@ RSpec.describe 'DuckLake Integration' do
           updated_at TIMESTAMP
         )
       SQL
+
+      # Create test data using ActiveRecord
+      user_class.create!(id: 1, name: 'Alice', age: 25, department: 'Engineering', active: true)
+      user_class.create!(id: 2, name: 'Bob', age: 30, department: 'Engineering', active: true)
+      user_class.create!(id: 3, name: 'Charlie', age: 35, department: 'Sales', active: false)
+      user_class.create!(id: 4, name: 'Diana', age: 28, department: 'Sales', active: true)
+      user_class.create!(id: 5, name: 'Eve', age: 32, department: 'Marketing', active: true)
     end
 
     after do
@@ -443,26 +459,6 @@ RSpec.describe 'DuckLake Integration' do
       end
       ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?
       FileUtils.rm_rf(temp_dir)
-    end
-
-    let(:user_class) do
-      Class.new(ActiveRecord::Base) do
-        self.table_name = 'query_users'
-        self.primary_key = 'id'
-
-        def self.name
-          'QueryUser'
-        end
-      end
-    end
-
-    before do
-      # Create test data using ActiveRecord
-      user_class.create!(id: 1, name: 'Alice', age: 25, department: 'Engineering', active: true)
-      user_class.create!(id: 2, name: 'Bob', age: 30, department: 'Engineering', active: true)
-      user_class.create!(id: 3, name: 'Charlie', age: 35, department: 'Sales', active: false)
-      user_class.create!(id: 4, name: 'Diana', age: 28, department: 'Sales', active: true)
-      user_class.create!(id: 5, name: 'Eve', age: 32, department: 'Marketing', active: true)
     end
 
     describe 'WHERE clauses' do
@@ -670,10 +666,43 @@ RSpec.describe 'DuckLake Integration' do
   describe 'data type insert and read verification via ActiveRecord' do
     let(:temp_dir) { Dir.mktmpdir('ducklake_datatype_test') }
     let(:connection) { ActiveRecord::Base.connection }
+    # Model class for testing all data types
+    let(:model_class) do
+      Class.new(ActiveRecord::Base) do
+        self.table_name = 'type_samples'
+        self.primary_key = 'id'
+
+        def self.name
+          'TypeSample'
+        end
+      end
+    end
 
     before do
       FileUtils.mkdir_p(File.join(temp_dir, 'data'))
       ActiveRecord::Base.establish_connection(ducklake_config(temp_dir))
+
+      # Create table with all supported types using migrations
+      connection.create_table(:type_samples, id: false) do |t|
+        t.integer :id
+        # Standard types
+        t.bigint :big_number
+        t.integer :count
+        t.string :label
+        t.boolean :active
+        t.float :ratio
+        t.decimal :amount, precision: 10, scale: 2
+        t.decimal :coordinates, precision: 9, scale: 6
+        t.date :event_date
+        t.datetime :recorded_at
+        # DuckDB-specific signed integers
+        t.tinyint :tiny_signed
+        t.smallint :small_signed
+        # DuckDB-specific unsigned integers
+        t.utinyint :tiny_unsigned
+        t.usmallint :small_unsigned
+        t.uinteger :uint_val
+      end
     end
 
     after do
@@ -681,275 +710,237 @@ RSpec.describe 'DuckLake Integration' do
       FileUtils.rm_rf(temp_dir)
     end
 
-    describe 'comprehensive data types' do
-      # Create a model class for testing all data types
-      let(:model_class) do
-        Class.new(ActiveRecord::Base) do
-          self.table_name = 'type_samples'
-          self.primary_key = 'id'
+    describe 'integer types' do
+      it 'handles BIGINT full range via ActiveRecord' do
+        # BIGINT: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807 (8 bytes signed)
+        model_class.create!(id: 1, big_number: 9_223_372_036_854_775_807)
+        model_class.create!(id: 2, big_number: -9_223_372_036_854_775_808)
+        model_class.create!(id: 3, big_number: 0)
 
-          def self.name
-            'TypeSample'
-          end
-        end
+        records = model_class.order(:id).pluck(:big_number)
+        expect(records).to eq([9_223_372_036_854_775_807, -9_223_372_036_854_775_808, 0])
       end
 
+      it 'handles INTEGER full range via ActiveRecord' do
+        # INTEGER: -2,147,483,648 to 2,147,483,647 (4 bytes signed)
+        model_class.create!(id: 1, count: 2_147_483_647)
+        model_class.create!(id: 2, count: -2_147_483_648)
+
+        records = model_class.order(:id).pluck(:count)
+        expect(records).to eq([2_147_483_647, -2_147_483_648])
+      end
+
+      it 'handles TINYINT full range via ActiveRecord' do
+        # TINYINT: -128 to 127 (1 byte signed)
+        model_class.create!(id: 1, tiny_signed: -128)
+        model_class.create!(id: 2, tiny_signed: 127)
+
+        records = model_class.order(:id).pluck(:tiny_signed)
+        expect(records).to eq([-128, 127])
+      end
+
+      it 'handles SMALLINT full range via ActiveRecord' do
+        # SMALLINT: -32,768 to 32,767 (2 bytes signed)
+        model_class.create!(id: 1, small_signed: -32_768)
+        model_class.create!(id: 2, small_signed: 32_767)
+
+        records = model_class.order(:id).pluck(:small_signed)
+        expect(records).to eq([-32_768, 32_767])
+      end
+    end
+
+    describe 'unsigned integer types' do
+      it 'handles UTINYINT full range via ActiveRecord' do
+        # UTINYINT: 0 to 255 (1 byte unsigned)
+        model_class.create!(id: 1, tiny_unsigned: 0)
+        model_class.create!(id: 2, tiny_unsigned: 255)
+
+        records = model_class.order(:id).pluck(:tiny_unsigned)
+        expect(records).to eq([0, 255])
+      end
+
+      it 'handles USMALLINT full range via ActiveRecord' do
+        # USMALLINT: 0 to 65,535 (2 bytes unsigned)
+        model_class.create!(id: 1, small_unsigned: 0)
+        model_class.create!(id: 2, small_unsigned: 65_535)
+
+        records = model_class.order(:id).pluck(:small_unsigned)
+        expect(records).to eq([0, 65_535])
+      end
+
+      it 'handles UINTEGER full range via ActiveRecord' do
+        # UINTEGER: 0 to 4,294,967,295 (4 bytes unsigned)
+        model_class.create!(id: 1, uint_val: 0)
+        model_class.create!(id: 2, uint_val: 4_294_967_295)
+
+        records = model_class.order(:id).pluck(:uint_val)
+        expect(records).to eq([0, 4_294_967_295])
+      end
+    end
+
+    describe 'decimal types' do
+      it 'handles DECIMAL with precision and scale via ActiveRecord' do
+        model_class.create!(id: 1, amount: BigDecimal('99999999.99'))
+        model_class.create!(id: 2, amount: BigDecimal('0.01'))
+
+        record1 = model_class.find(1)
+        record2 = model_class.find(2)
+
+        # DECIMALs should be exact - that's the point of using them over floats
+        expect(record1.amount).to eq(BigDecimal('99999999.99'))
+        expect(record2.amount).to eq(BigDecimal('0.01'))
+      end
+
+      it 'handles high precision coordinates via ActiveRecord' do
+        model_class.create!(id: 1, coordinates: BigDecimal('52.520008'))
+        model_class.create!(id: 2, coordinates: BigDecimal('-33.868820'))
+
+        records = model_class.order(:id).pluck(:coordinates)
+        # DECIMAL(9,6) should preserve all 6 decimal places exactly
+        expect(records[0]).to eq(BigDecimal('52.520008'))
+        expect(records[1]).to eq(BigDecimal('-33.868820'))
+      end
+    end
+
+    describe 'float type' do
+      it 'handles FLOAT/REAL via ActiveRecord' do
+        model_class.create!(id: 1, ratio: 3.14159)
+        model_class.create!(id: 2, ratio: -273.15)
+        model_class.create!(id: 3, ratio: 0.0)
+
+        records = model_class.order(:id).pluck(:ratio)
+        expect(records[0]).to be_within(0.0001).of(3.14159)
+        expect(records[1]).to be_within(0.01).of(-273.15)
+        expect(records[2]).to eq(0.0)
+      end
+    end
+
+    describe 'boolean type' do
+      it 'handles BOOLEAN via ActiveRecord' do
+        model_class.create!(id: 1, active: true)
+        model_class.create!(id: 2, active: false)
+        model_class.create!(id: 3, active: nil)
+
+        records = model_class.order(:id).pluck(:active)
+        expect(records).to eq([true, false, nil])
+      end
+
+      it 'supports boolean queries via ActiveRecord' do
+        model_class.create!(id: 1, label: 'active', active: true)
+        model_class.create!(id: 2, label: 'inactive', active: false)
+
+        active_records = model_class.where(active: true)
+        expect(active_records.count).to eq(1)
+        expect(active_records.first.label).to eq('active')
+      end
+    end
+
+    describe 'string type' do
+      it 'handles VARCHAR via ActiveRecord' do
+        model_class.create!(id: 1, label: 'Simple text')
+        model_class.create!(id: 2, label: 'Unicode: 日本語 🚀')
+        model_class.create!(id: 3, label: "Special: It's a \"test\"")
+
+        records = model_class.order(:id).pluck(:label)
+        expect(records[0]).to eq('Simple text')
+        expect(records[1]).to eq('Unicode: 日本語 🚀')
+        expect(records[2]).to eq("Special: It's a \"test\"")
+      end
+
+      it 'handles long strings via ActiveRecord' do
+        long_string = 'x' * 10_000
+        model_class.create!(id: 1, label: long_string)
+
+        record = model_class.find(1)
+        expect(record.label.length).to eq(10_000)
+      end
+    end
+
+    describe 'date and datetime types' do
+      it 'handles DATE via ActiveRecord' do
+        model_class.create!(id: 1, event_date: Date.new(2024, 1, 15))
+        model_class.create!(id: 2, event_date: Date.new(1999, 12, 31))
+
+        records = model_class.order(:id).pluck(:event_date)
+        expect(records[0]).to eq(Date.new(2024, 1, 15))
+        expect(records[1]).to eq(Date.new(1999, 12, 31))
+      end
+
+      it 'handles TIMESTAMP via ActiveRecord' do
+        time1 = Time.new(2024, 1, 15, 14, 30, 0, '+00:00')
+        model_class.create!(id: 1, recorded_at: time1)
+
+        record = model_class.find(1)
+        expect(record.recorded_at.year).to eq(2024)
+        expect(record.recorded_at.month).to eq(1)
+        expect(record.recorded_at.day).to eq(15)
+      end
+    end
+
+    describe 'NULL handling' do
+      it 'handles NULL values for all types via ActiveRecord' do
+        model_class.create!(
+          id: 1,
+          big_number: nil,
+          count: nil,
+          label: nil,
+          active: nil,
+          ratio: nil,
+          amount: nil,
+          event_date: nil,
+          recorded_at: nil
+        )
+
+        record = model_class.find(1)
+        expect(record.big_number).to be_nil
+        expect(record.count).to be_nil
+        expect(record.label).to be_nil
+        expect(record.active).to be_nil
+        expect(record.ratio).to be_nil
+        expect(record.amount).to be_nil
+        expect(record.event_date).to be_nil
+        expect(record.recorded_at).to be_nil
+      end
+    end
+
+    describe 'ActiveRecord queries' do
       before do
-        # Create table with all supported types using migrations
-        connection.create_table(:type_samples, id: false) do |t|
-          t.integer :id
-          # Standard types
-          t.bigint :big_number
-          t.integer :count
-          t.string :label
-          t.boolean :active
-          t.float :ratio
-          t.decimal :amount, precision: 10, scale: 2
-          t.decimal :coordinates, precision: 9, scale: 6
-          t.date :event_date
-          t.datetime :recorded_at
-          # DuckDB-specific signed integers
-          t.tinyint :tiny_signed
-          t.smallint :small_signed
-          # DuckDB-specific unsigned integers
-          t.utinyint :tiny_unsigned
-          t.usmallint :small_unsigned
-          t.uinteger :uint_val
-        end
+        model_class.create!(id: 1, label: 'Alpha', count: 10, active: true)
+        model_class.create!(id: 2, label: 'Beta', count: 20, active: false)
+        model_class.create!(id: 3, label: 'Gamma', count: 30, active: true)
       end
 
-      describe 'integer types' do
-        it 'handles BIGINT full range via ActiveRecord' do
-          # BIGINT: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807 (8 bytes signed)
-          model_class.create!(id: 1, big_number: 9_223_372_036_854_775_807)
-          model_class.create!(id: 2, big_number: -9_223_372_036_854_775_808)
-          model_class.create!(id: 3, big_number: 0)
-
-          records = model_class.order(:id).pluck(:big_number)
-          expect(records).to eq([9_223_372_036_854_775_807, -9_223_372_036_854_775_808, 0])
-        end
-
-        it 'handles INTEGER full range via ActiveRecord' do
-          # INTEGER: -2,147,483,648 to 2,147,483,647 (4 bytes signed)
-          model_class.create!(id: 1, count: 2_147_483_647)
-          model_class.create!(id: 2, count: -2_147_483_648)
-
-          records = model_class.order(:id).pluck(:count)
-          expect(records).to eq([2_147_483_647, -2_147_483_648])
-        end
-
-        it 'handles TINYINT full range via ActiveRecord' do
-          # TINYINT: -128 to 127 (1 byte signed)
-          model_class.create!(id: 1, tiny_signed: -128)
-          model_class.create!(id: 2, tiny_signed: 127)
-
-          records = model_class.order(:id).pluck(:tiny_signed)
-          expect(records).to eq([-128, 127])
-        end
-
-        it 'handles SMALLINT full range via ActiveRecord' do
-          # SMALLINT: -32,768 to 32,767 (2 bytes signed)
-          model_class.create!(id: 1, small_signed: -32_768)
-          model_class.create!(id: 2, small_signed: 32_767)
-
-          records = model_class.order(:id).pluck(:small_signed)
-          expect(records).to eq([-32_768, 32_767])
-        end
+      it 'supports where queries' do
+        results = model_class.where(active: true).order(:id)
+        expect(results.pluck(:label)).to eq(%w[Alpha Gamma])
       end
 
-      describe 'unsigned integer types' do
-        it 'handles UTINYINT full range via ActiveRecord' do
-          # UTINYINT: 0 to 255 (1 byte unsigned)
-          model_class.create!(id: 1, tiny_unsigned: 0)
-          model_class.create!(id: 2, tiny_unsigned: 255)
-
-          records = model_class.order(:id).pluck(:tiny_unsigned)
-          expect(records).to eq([0, 255])
-        end
-
-        it 'handles USMALLINT full range via ActiveRecord' do
-          # USMALLINT: 0 to 65,535 (2 bytes unsigned)
-          model_class.create!(id: 1, small_unsigned: 0)
-          model_class.create!(id: 2, small_unsigned: 65_535)
-
-          records = model_class.order(:id).pluck(:small_unsigned)
-          expect(records).to eq([0, 65_535])
-        end
-
-        it 'handles UINTEGER full range via ActiveRecord' do
-          # UINTEGER: 0 to 4,294,967,295 (4 bytes unsigned)
-          model_class.create!(id: 1, uint_val: 0)
-          model_class.create!(id: 2, uint_val: 4_294_967_295)
-
-          records = model_class.order(:id).pluck(:uint_val)
-          expect(records).to eq([0, 4_294_967_295])
-        end
+      it 'supports comparison queries' do
+        results = model_class.where('count > ?', 15).order(:id)
+        expect(results.pluck(:label)).to eq(%w[Beta Gamma])
       end
 
-      describe 'decimal types' do
-        it 'handles DECIMAL with precision and scale via ActiveRecord' do
-          model_class.create!(id: 1, amount: BigDecimal('99999999.99'))
-          model_class.create!(id: 2, amount: BigDecimal('0.01'))
-
-          record1 = model_class.find(1)
-          record2 = model_class.find(2)
-
-          # DECIMALs should be exact - that's the point of using them over floats
-          expect(record1.amount).to eq(BigDecimal('99999999.99'))
-          expect(record2.amount).to eq(BigDecimal('0.01'))
-        end
-
-        it 'handles high precision coordinates via ActiveRecord' do
-          model_class.create!(id: 1, coordinates: BigDecimal('52.520008'))
-          model_class.create!(id: 2, coordinates: BigDecimal('-33.868820'))
-
-          records = model_class.order(:id).pluck(:coordinates)
-          # DECIMAL(9,6) should preserve all 6 decimal places exactly
-          expect(records[0]).to eq(BigDecimal('52.520008'))
-          expect(records[1]).to eq(BigDecimal('-33.868820'))
-        end
+      it 'supports aggregations' do
+        expect(model_class.sum(:count)).to eq(60)
+        expect(model_class.average(:count).to_i).to eq(20)
+        expect(model_class.maximum(:count)).to eq(30)
+        expect(model_class.minimum(:count)).to eq(10)
       end
 
-      describe 'float type' do
-        it 'handles FLOAT/REAL via ActiveRecord' do
-          model_class.create!(id: 1, ratio: 3.14159)
-          model_class.create!(id: 2, ratio: -273.15)
-          model_class.create!(id: 3, ratio: 0.0)
+      it 'supports updates via ActiveRecord' do
+        record = model_class.find(1)
+        record.update!(label: 'Updated', count: 100)
 
-          records = model_class.order(:id).pluck(:ratio)
-          expect(records[0]).to be_within(0.0001).of(3.14159)
-          expect(records[1]).to be_within(0.01).of(-273.15)
-          expect(records[2]).to eq(0.0)
-        end
+        reloaded = model_class.find(1)
+        expect(reloaded.label).to eq('Updated')
+        expect(reloaded.count).to eq(100)
       end
 
-      describe 'boolean type' do
-        it 'handles BOOLEAN via ActiveRecord' do
-          model_class.create!(id: 1, active: true)
-          model_class.create!(id: 2, active: false)
-          model_class.create!(id: 3, active: nil)
-
-          records = model_class.order(:id).pluck(:active)
-          expect(records).to eq([true, false, nil])
-        end
-
-        it 'supports boolean queries via ActiveRecord' do
-          model_class.create!(id: 1, label: 'active', active: true)
-          model_class.create!(id: 2, label: 'inactive', active: false)
-
-          active_records = model_class.where(active: true)
-          expect(active_records.count).to eq(1)
-          expect(active_records.first.label).to eq('active')
-        end
-      end
-
-      describe 'string type' do
-        it 'handles VARCHAR via ActiveRecord' do
-          model_class.create!(id: 1, label: 'Simple text')
-          model_class.create!(id: 2, label: 'Unicode: 日本語 🚀')
-          model_class.create!(id: 3, label: "Special: It's a \"test\"")
-
-          records = model_class.order(:id).pluck(:label)
-          expect(records[0]).to eq('Simple text')
-          expect(records[1]).to eq('Unicode: 日本語 🚀')
-          expect(records[2]).to eq("Special: It's a \"test\"")
-        end
-
-        it 'handles long strings via ActiveRecord' do
-          long_string = 'x' * 10_000
-          model_class.create!(id: 1, label: long_string)
-
-          record = model_class.find(1)
-          expect(record.label.length).to eq(10_000)
-        end
-      end
-
-      describe 'date and datetime types' do
-        it 'handles DATE via ActiveRecord' do
-          model_class.create!(id: 1, event_date: Date.new(2024, 1, 15))
-          model_class.create!(id: 2, event_date: Date.new(1999, 12, 31))
-
-          records = model_class.order(:id).pluck(:event_date)
-          expect(records[0]).to eq(Date.new(2024, 1, 15))
-          expect(records[1]).to eq(Date.new(1999, 12, 31))
-        end
-
-        it 'handles TIMESTAMP via ActiveRecord' do
-          time1 = Time.new(2024, 1, 15, 14, 30, 0, '+00:00')
-          model_class.create!(id: 1, recorded_at: time1)
-
-          record = model_class.find(1)
-          expect(record.recorded_at.year).to eq(2024)
-          expect(record.recorded_at.month).to eq(1)
-          expect(record.recorded_at.day).to eq(15)
-        end
-      end
-
-      describe 'NULL handling' do
-        it 'handles NULL values for all types via ActiveRecord' do
-          model_class.create!(
-            id: 1,
-            big_number: nil,
-            count: nil,
-            label: nil,
-            active: nil,
-            ratio: nil,
-            amount: nil,
-            event_date: nil,
-            recorded_at: nil
-          )
-
-          record = model_class.find(1)
-          expect(record.big_number).to be_nil
-          expect(record.count).to be_nil
-          expect(record.label).to be_nil
-          expect(record.active).to be_nil
-          expect(record.ratio).to be_nil
-          expect(record.amount).to be_nil
-          expect(record.event_date).to be_nil
-          expect(record.recorded_at).to be_nil
-        end
-      end
-
-      describe 'ActiveRecord queries' do
-        before do
-          model_class.create!(id: 1, label: 'Alpha', count: 10, active: true)
-          model_class.create!(id: 2, label: 'Beta', count: 20, active: false)
-          model_class.create!(id: 3, label: 'Gamma', count: 30, active: true)
-        end
-
-        it 'supports where queries' do
-          results = model_class.where(active: true).order(:id)
-          expect(results.pluck(:label)).to eq(%w[Alpha Gamma])
-        end
-
-        it 'supports comparison queries' do
-          results = model_class.where('count > ?', 15).order(:id)
-          expect(results.pluck(:label)).to eq(%w[Beta Gamma])
-        end
-
-        it 'supports aggregations' do
-          expect(model_class.sum(:count)).to eq(60)
-          expect(model_class.average(:count).to_i).to eq(20)
-          expect(model_class.maximum(:count)).to eq(30)
-          expect(model_class.minimum(:count)).to eq(10)
-        end
-
-        it 'supports updates via ActiveRecord' do
-          record = model_class.find(1)
-          record.update!(label: 'Updated', count: 100)
-
-          reloaded = model_class.find(1)
-          expect(reloaded.label).to eq('Updated')
-          expect(reloaded.count).to eq(100)
-        end
-
-        it 'supports destroy via ActiveRecord' do
-          expect(model_class.count).to eq(3)
-          model_class.find(2).destroy!
-          expect(model_class.count).to eq(2)
-          expect { model_class.find(2) }.to raise_error(ActiveRecord::RecordNotFound)
-        end
+      it 'supports destroy via ActiveRecord' do
+        expect(model_class.count).to eq(3)
+        model_class.find(2).destroy!
+        expect(model_class.count).to eq(2)
+        expect { model_class.find(2) }.to raise_error(ActiveRecord::RecordNotFound)
       end
     end
   end

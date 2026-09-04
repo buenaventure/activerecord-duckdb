@@ -19,8 +19,8 @@ RSpec.describe 'DuckLake Migrations' do
       extensions: ['ducklake'],
       attachments: [{
         name: 'ducklake',
-        connection_string: "ducklake:#{File.join(temp_dir, 'test.ducklake')}",
-        options: "DATA_PATH '#{File.join(temp_dir, 'data')}'"
+        connection_string: "ducklake:#{File.join(temp_dir, "test.ducklake")}",
+        options: "DATA_PATH '#{File.join(temp_dir, "data")}'"
       }],
       use_database: 'ducklake'
     }
@@ -30,9 +30,31 @@ RSpec.describe 'DuckLake Migrations' do
     let(:temp_dir) { Dir.mktmpdir('ducklake_migration_test') }
     let(:connection) { ActiveRecord::Base.connection }
 
+    # This test creates a table with one example of each supported column type.
     before do
       FileUtils.mkdir_p(File.join(temp_dir, 'data'))
       ActiveRecord::Base.establish_connection(ducklake_config(temp_dir))
+
+      connection.create_table(:all_types, id: false) do |t|
+        # Standard Rails types
+        t.bigint :record_id, null: false
+        t.datetime :recorded_at, null: false
+        t.integer :count
+        t.string :label
+        t.boolean :active
+        t.float :ratio
+        t.decimal :amount, precision: 10, scale: 2
+        t.decimal :coordinates, precision: 9, scale: 6
+
+        # Signed integer types in DuckDB
+        t.tinyint :tiny_val
+        t.smallint :small_val
+
+        # Unsigned integer types in DuckDB
+        t.utinyint :unsigned_tiny
+        t.usmallint :unsigned_small
+        t.uinteger :unsigned_int
+      end
     end
 
     after do
@@ -40,113 +62,87 @@ RSpec.describe 'DuckLake Migrations' do
       FileUtils.rm_rf(temp_dir)
     end
 
-    describe 'comprehensive column types table' do
-      # This test creates a table with one example of each supported column type.
-      before do
-        connection.create_table(:all_types, id: false) do |t|
-          # Standard Rails types
-          t.bigint :record_id, null: false
-          t.datetime :recorded_at, null: false
-          t.integer :count
-          t.string :label
-          t.boolean :active
-          t.float :ratio
-          t.decimal :amount, precision: 10, scale: 2
-          t.decimal :coordinates, precision: 9, scale: 6
+    it 'creates the table successfully' do
+      expect(connection.table_exists?(:all_types)).to be true
+    end
 
-          # Signed integer types in DuckDB
-          t.tinyint :tiny_val
-          t.smallint :small_val
+    it 'creates all columns' do
+      columns = connection.columns(:all_types)
+      column_names = columns.map(&:name)
 
-          # Unsigned integer types in DuckDB
-          t.utinyint :unsigned_tiny
-          t.usmallint :unsigned_small
-          t.uinteger :unsigned_int
-        end
+      expected_columns = %w[
+        record_id recorded_at count label active ratio amount coordinates
+        tiny_val small_val unsigned_tiny unsigned_small unsigned_int
+      ]
+
+      expected_columns.each do |col_name|
+        expect(column_names).to include(col_name), "Expected column '#{col_name}' to exist"
       end
+    end
 
-      it 'creates the table successfully' do
-        expect(connection.table_exists?(:all_types)).to be true
-      end
+    describe 'column SQL types' do
+      let(:columns) { connection.columns(:all_types) }
+      let(:columns_by_name) { columns.index_by(&:name) }
 
-      it 'creates all columns' do
-        columns = connection.columns(:all_types)
-        column_names = columns.map(&:name)
-
-        expected_columns = %w[
-          record_id recorded_at count label active ratio amount coordinates
-          tiny_val small_val unsigned_tiny unsigned_small unsigned_int
-        ]
-
-        expected_columns.each do |col_name|
-          expect(column_names).to include(col_name), "Expected column '#{col_name}' to exist"
-        end
-      end
-
-      describe 'column SQL types' do
-        let(:columns) { connection.columns(:all_types) }
-        let(:columns_by_name) { columns.index_by(&:name) }
-
-        # Standard Rails types mapped to DuckDB
-        {
-          'record_id' => 'BIGINT',
-          'recorded_at' => 'TIMESTAMP',
-          'count' => 'INTEGER',
-          'label' => 'VARCHAR',
-          'active' => 'BOOLEAN',
-          'ratio' => /REAL|FLOAT/i,
-          'amount' => /DECIMAL\(10,\s*2\)/i,
-          'coordinates' => /DECIMAL\(9,\s*6\)/i
-        }.each do |column_name, expected_type|
-          it "maps #{column_name} to correct SQL type" do
-            col = columns_by_name[column_name]
-            expect(col).not_to be_nil, "Column '#{column_name}' not found"
-            if expected_type.is_a?(Regexp)
-              expect(col.sql_type).to match(expected_type)
-            else
-              expect(col.sql_type.upcase).to eq(expected_type.upcase)
-            end
-          end
-        end
-
-        # Signed integer types in DuckDB
-        it 'maps tiny_val to TINYINT' do
-          col = columns_by_name['tiny_val']
-          expect(col.sql_type.upcase).to eq('TINYINT')
-        end
-
-        it 'maps small_val to SMALLINT' do
-          col = columns_by_name['small_val']
-          expect(col.sql_type.upcase).to eq('SMALLINT')
-        end
-
-        # Unsigned integer types in DuckDB
-        {
-          'unsigned_tiny' => 'UTINYINT',
-          'unsigned_small' => 'USMALLINT',
-          'unsigned_int' => 'UINTEGER'
-        }.each do |column_name, expected_type|
-          it "maps #{column_name} to #{expected_type}" do
-            col = columns_by_name[column_name]
-            expect(col).not_to be_nil, "Column '#{column_name}' not found"
-            expect(col.sql_type.upcase).to eq(expected_type)
+      # Standard Rails types mapped to DuckDB
+      {
+        'record_id' => 'BIGINT',
+        'recorded_at' => 'TIMESTAMP',
+        'count' => 'INTEGER',
+        'label' => 'VARCHAR',
+        'active' => 'BOOLEAN',
+        'ratio' => /REAL|FLOAT/i,
+        'amount' => /DECIMAL\(10,\s*2\)/i,
+        'coordinates' => /DECIMAL\(9,\s*6\)/i
+      }.each do |column_name, expected_type|
+        it "maps #{column_name} to correct SQL type" do
+          col = columns_by_name[column_name]
+          expect(col).not_to be_nil, "Column '#{column_name}' not found"
+          if expected_type.is_a?(Regexp)
+            expect(col.sql_type).to match(expected_type)
+          else
+            expect(col.sql_type.upcase).to eq(expected_type.upcase)
           end
         end
       end
 
-      describe 'NOT NULL constraints' do
-        let(:columns) { connection.columns(:all_types) }
-        let(:columns_by_name) { columns.index_by(&:name) }
+      # Signed integer types in DuckDB
+      it 'maps tiny_val to TINYINT' do
+        col = columns_by_name['tiny_val']
+        expect(col.sql_type.upcase).to eq('TINYINT')
+      end
 
-        it 'enforces NOT NULL on required columns' do
-          expect(columns_by_name['record_id'].null).to be false
-          expect(columns_by_name['recorded_at'].null).to be false
-        end
+      it 'maps small_val to SMALLINT' do
+        col = columns_by_name['small_val']
+        expect(col.sql_type.upcase).to eq('SMALLINT')
+      end
 
-        it 'allows NULL on optional columns' do
-          expect(columns_by_name['label'].null).to be true
-          expect(columns_by_name['count'].null).to be true
+      # Unsigned integer types in DuckDB
+      {
+        'unsigned_tiny' => 'UTINYINT',
+        'unsigned_small' => 'USMALLINT',
+        'unsigned_int' => 'UINTEGER'
+      }.each do |column_name, expected_type|
+        it "maps #{column_name} to #{expected_type}" do
+          col = columns_by_name[column_name]
+          expect(col).not_to be_nil, "Column '#{column_name}' not found"
+          expect(col.sql_type.upcase).to eq(expected_type)
         end
+      end
+    end
+
+    describe 'NOT NULL constraints' do
+      let(:columns) { connection.columns(:all_types) }
+      let(:columns_by_name) { columns.index_by(&:name) }
+
+      it 'enforces NOT NULL on required columns' do
+        expect(columns_by_name['record_id'].null).to be false
+        expect(columns_by_name['recorded_at'].null).to be false
+      end
+
+      it 'allows NULL on optional columns' do
+        expect(columns_by_name['label'].null).to be true
+        expect(columns_by_name['count'].null).to be true
       end
     end
 
@@ -168,7 +164,7 @@ RSpec.describe 'DuckLake Migrations' do
         expect(connection.table_exists?(:events)).to be true
       end
 
-      # Note: DuckLake does not support removal of partitioning after you set it.
+      # NOTE: DuckLake does not support removal of partitioning after you set it.
       # Partitioning is a one-way operation.
       # To change partitioning, recreate the table.
 
