@@ -419,4 +419,52 @@ RSpec.describe 'DatabaseStatements' do
       }.to raise_error(ActiveRecord::StatementInvalid)
     end
   end
+
+  # Rails 8.1 moved the write_query? decision out of the readonly guard: its
+  # ensure_writes_are_allowed raises for any SQL once the connection prevents writes, where Rails
+  # 8.0's check_if_write_query asked write_query? first. Both execute paths here hand the guard
+  # every statement, so reads have to stay allowed on a connection that prevents writes.
+  describe 'readonly connections' do
+    # `around` runs before the outer `before`, so @connection is not set yet - each example wraps
+    # its own statement instead. The switch lives on the model class, not on the adapter.
+    def preventing_writes(&) = ActiveRecord::Base.while_preventing_writes(true, &)
+
+    it 'allows a SELECT' do
+      result = preventing_writes { @connection.execute('SELECT * FROM statement_test') }
+
+      expect(result.to_a.length).to eq(3)
+    end
+
+    it 'allows a PRAGMA, which schema reflection needs' do
+      result = preventing_writes { @connection.execute("PRAGMA table_info('statement_test')") }
+
+      expect(result.to_a).not_to be_empty
+    end
+
+    it 'allows a SELECT through internal_exec_query' do
+      result = preventing_writes do
+        @connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
+      end
+
+      expect(result.rows.first.first).to eq('Alice')
+    end
+
+    it 'rejects an INSERT' do
+      expect do
+        preventing_writes { @connection.execute("INSERT INTO statement_test VALUES (5, 'Eve', 22, true)") }
+      end.to raise_error(ActiveRecord::ReadOnlyError)
+    end
+
+    it 'rejects an UPDATE' do
+      expect do
+        preventing_writes { @connection.execute('UPDATE statement_test SET age = 99') }
+      end.to raise_error(ActiveRecord::ReadOnlyError)
+    end
+
+    it 'rejects a DELETE' do
+      expect do
+        preventing_writes { @connection.execute('DELETE FROM statement_test') }
+      end.to raise_error(ActiveRecord::ReadOnlyError)
+    end
+  end
 end

@@ -125,11 +125,18 @@ module ActiveRecord
         # Handles API differences between Rails versions:
         # - Rails 8.1+: Uses ensure_writes_are_allowed
         # - Rails 7.2-8.0: Uses check_if_write_query + mark_transaction_written_if_write
+        #
+        # The two APIs divide the work differently. Rails 8.0's check_if_write_query asks
+        # write_query? itself, so it is safe to hand it every statement. Rails 8.1 moved that
+        # decision to the caller: ensure_writes_are_allowed raises whenever the connection prevents
+        # writes, whatever the SQL. Both call sites here pass reads as well as writes, so the
+        # write_query? guard has to sit in front of it - otherwise a SELECT or a PRAGMA raises
+        # ActiveRecord::ReadOnlyError under a reading role.
         # @param sql [String] The SQL query to check
         def ensure_write_query_allowed(sql)
           if respond_to?(:ensure_writes_are_allowed, true)
             # Rails 8.1+
-            ensure_writes_are_allowed(sql)
+            ensure_writes_are_allowed(sql) if write_query?(sql)
           else
             # Rails 7.2-8.0
             check_if_write_query(sql)
