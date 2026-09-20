@@ -17,20 +17,28 @@ runs:
         sudo apt-get install -y --no-install-recommends build-essential
         sudo apt-get install -y --no-install-recommends cmake git wget
 
-    - name: Setup and Install DuckDB
-      uses: opt-nc/setup-duckdb-action@v1.0.13
-      with:
-        version: v1.5.5
-
-    - name: Install DuckDB development files
+    - name: Install DuckDB
       shell: sh
+      env:
+        DUCKDB_VERSION: v1.5.5
       run: |
-        wget https://github.com/duckdb/duckdb/releases/download/v1.5.5/libduckdb-linux-amd64.zip
-        unzip libduckdb-linux-amd64.zip -d libduckdb
+        base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
+
+        # spec/support/quack_server.rb serves a Quack endpoint by shelling out to this binary,
+        # which is something libduckdb cannot do.
+        wget -q "${base}/duckdb_cli-linux-amd64.zip"
+        unzip -q duckdb_cli-linux-amd64.zip -d duckdb-cli
+        sudo install -m 755 duckdb-cli/duckdb /usr/local/bin/duckdb
+
+        # The duckdb gem builds its native extension against these.
+        wget -q "${base}/libduckdb-linux-amd64.zip"
+        unzip -q libduckdb-linux-amd64.zip -d libduckdb
         sudo mv libduckdb/duckdb.* /usr/local/include/
         sudo mv libduckdb/libduckdb.so /usr/local/lib/
         sudo ldconfig /usr/local/lib
-        rm -rf libduckdb libduckdb-linux-amd64.zip
+
+        rm -rf duckdb-cli duckdb_cli-linux-amd64.zip libduckdb libduckdb-linux-amd64.zip
+        duckdb --version
 
     # Setup ruby and bundle install
     - name: Setup Ruby

@@ -10,6 +10,7 @@ AllCops:
   UseCache: true
   Exclude:
     - 'gemfiles/**/*'
+    - 'vendor/**/*'
 
 Gemspec/RequiredRubyVersion:
   Enabled: false

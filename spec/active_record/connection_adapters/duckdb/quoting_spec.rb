@@ -159,15 +159,18 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quoting do
         expect(adapter.quote(time)).to eq("'2026-08-26 12:30:45.123456'")
       end
 
+      # The zone is pinned rather than inherited from the machine: this example only says
+      # something when local time differs from UTC, and CI runs in UTC.
       it 'honours ActiveRecord.default_timezone rather than always converting to UTC' do
         time = Time.new(2026, 8, 26, 12, 30, 45, '+02:00')
-        original = ActiveRecord.default_timezone
-        begin
-          ActiveRecord.default_timezone = :local
-          expect(adapter.quote(time)).to eq("'#{adapter.quoted_date(time)}'")
-          expect(adapter.quote(time)).to include('12:30:45')
-        ensure
-          ActiveRecord.default_timezone = original
+        with_timezone('Europe/Paris') do
+          with_default_timezone(:local) do
+            expect(adapter.quote(time)).to eq("'#{adapter.quoted_date(time)}'")
+            expect(adapter.quote(time)).to include('12:30:45')
+          end
+          with_default_timezone(:utc) do
+            expect(adapter.quote(time)).to include('10:30:45')
+          end
         end
       end
     end

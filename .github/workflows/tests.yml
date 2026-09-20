@@ -7,7 +7,9 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.ruby == 'head' }}
     strategy:
+      fail-fast: false
       matrix:
         ruby: ["3.3.12", "3.4.10", "4.0.6", "head"]
         rails: ["7.2", "8.0", "8.1"]

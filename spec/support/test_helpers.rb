@@ -335,6 +335,26 @@ module TestHelpers
     ENV['RAILS_ENV'] = original_env
   end
 
+  # Pins the process timezone. Time#getlocal re-reads ENV['TZ'] on every call, so this
+  # controls how ActiveRecord.default_timezone = :local renders a timestamp. Pin to a
+  # non-UTC zone in any example that distinguishes :local from :utc, otherwise the two
+  # render identically on a UTC machine and the example proves nothing there.
+  def with_timezone(zone)
+    original_zone = ENV.fetch('TZ', nil)
+    ENV['TZ'] = zone
+    yield
+  ensure
+    ENV['TZ'] = original_zone
+  end
+
+  def with_default_timezone(timezone)
+    original_timezone = ActiveRecord.default_timezone
+    ActiveRecord.default_timezone = timezone
+    yield
+  ensure
+    ActiveRecord.default_timezone = original_timezone
+  end
+
   def stub_rails_logger
     return unless defined?(Rails)
 
