@@ -59,15 +59,24 @@ module ActiveRecord
       #   - No statement that scans more than one remote table. This rules out joins, subqueries,
       #     and INSERT ... SELECT
       #
-      # This code does not sort statements by what the attachment supports. Instead, it wraps
-      # every statement in:
+      # This code does not sort statements by what the attachment supports. Instead, it sends
+      # every statement to the server as-is. The server then behaves like a local DuckDB, at no
+      # measurable cost. Funneled queries match direct queries in throughput and return the same
+      # types. Nothing resolves against the local catalog. So the client needs no USE statement
+      # and no cache invalidation.
       #
-      #   SELECT * FROM quack.query('<statement>')
+      # How a statement gets there depends on the DuckDB version the client runs:
       #
-      # This wrapper sends the statement to the server as-is. The server then behaves like a
-      # local DuckDB, at no measurable cost. Funneled queries match direct queries in throughput
-      # and return the same types. Nothing resolves against the local catalog. So the client
-      # needs no USE statement and no cache invalidation.
+      #   - DuckDB 2.0 and later: the session runs +CONNECT quack+ once, as the last step of
+      #     #configure_connection. From then on, DuckDB itself forwards every statement on that
+      #     connection to the server, including SET, so nothing may run locally after it.
+      #   - DuckDB 1.5: +CONNECT+ does not exist yet. This code wraps every statement in
+      #
+      #       SELECT * FROM quack.query('<statement>')
+      #
+      #     DuckDB 2.0 names +CONNECT+ as the successor of this wrapper.
+      #
+      # Both paths reach the same server-side call, so both behave the same.
       #
       # Configure Quack with a +quack+ section on the database:
       #
@@ -92,6 +101,22 @@ module ActiveRecord
         # The name under which the server is attached. Only the funnel itself uses this name.
         ATTACHMENT = 'quack'
 
+        # The first DuckDB release with the CONNECT statement
+        CONNECT_VERSION = Gem::Version.new('2.0')
+
+        # Whether a DuckDB library routes statements with CONNECT.
+        #
+        # This check drops the pre-release part, so a 2.0 alpha counts as 2.0. The alpha builds
+        # already ship CONNECT.
+        #
+        # @param version [String] A DuckDB library version, such as "1.5.5" or "2.0.0-alpha39998"
+        # @return [Boolean]
+        def self.connect_supported?(version = DuckDB::LIBRARY_VERSION)
+          Gem::Version.new(version.to_s.delete_prefix('v')).release >= CONNECT_VERSION
+        rescue ArgumentError
+          false
+        end
+
         # The +quack+ section of the database config
         # @return [Hash, nil] config with symbol keys, or nil when no Quack server is configured
         def quack_config
@@ -104,6 +129,23 @@ module ActiveRecord
         # @return [Boolean]
         def quack?
           !quack_config.nil?
+        end
+
+        # Whether statements reach the server through CONNECT (DuckDB 2.0+), not the query() wrapper
+        # @return [Boolean]
+        def quack_connect?
+          quack? && Quack.connect_supported?
+        end
+
+        # Whether this connection has already run CONNECT.
+        #
+        # From that point on, every statement runs on the server. This includes probes that are
+        # meant for the local database, such as the one in #configuration_locked?. The check is
+        # tied to the raw connection object, so a reconnect starts over.
+        #
+        # @return [Boolean]
+        def quack_connected?
+          !raw_connection.nil? && @quack_connected_on.equal?(raw_connection)
         end
 
         # Whether ActiveRecord may keep bind parameters separate from the statement text.
@@ -124,17 +166,23 @@ module ActiveRecord
         # point the alias at the new method too
         alias prepared_statements prepared_statements?
 
-        # Wraps a statement so it runs in the server session. Returns the statement unchanged
-        # when no Quack server is set up. Callers may call this method for every statement, with
-        # no check first.
+        # Prepares a statement to run in the server session. Returns the statement unchanged when
+        # no Quack server is set up. Callers may call this method for every statement, with no
+        # check first.
+        #
+        # With CONNECT, DuckDB forwards the statement itself, so this method returns it unchanged.
+        # Without CONNECT, this method wraps it in the query() table function.
         #
         # @param sql [String] The statement to run
-        # @param binds [Array] Bind parameters of the statement. A funnel cannot carry them
+        # @param binds [Array] Bind parameters of the statement. Neither path can carry them
         # @return [String] The statement to hand to DuckDB
         # @raise [QuackBindParametersNotSupported] if the statement has bind parameters
         def quack_sql(sql, binds = [])
           return sql unless quack?
+          # CONNECT refuses parameterized statements as well. This error names the cause, not
+          # DuckDB's own
           raise QuackBindParametersNotSupported, sql if binds.any?
+          return sql if quack_connect?
 
           "SELECT * FROM #{ATTACHMENT}.query(#{quote(sql)})"
         end
@@ -144,11 +192,25 @@ module ActiveRecord
         def attach_quack
           return unless quack?
 
-          begin
-            raw_connection.execute(attach_quack_sql)
-          rescue DuckDB::Error => e
-            raise QuackAttachmentFailed.new(quack_config[:uri], e.message.lines.first.to_s.strip,
-                                            computed_default_suspects)
+          raw_connection.execute(attach_quack_sql)
+        rescue DuckDB::Error => e
+          raise QuackAttachmentFailed.new(quack_config[:uri], e.message.lines.first.to_s.strip,
+                                          computed_default_suspects)
+        end
+
+        # Points this session at the attached server. Called last in #configure_connection.
+        #
+        # From DuckDB 2.0 on, this method runs CONNECT. CONNECT sends every later statement on
+        # this connection to the server, including SET. So nothing that must run locally may
+        # come after it, lock_configuration included.
+        #
+        # @return [void]
+        def enter_quack
+          return unless quack?
+
+          if quack_connect?
+            raw_connection.execute("CONNECT #{ATTACHMENT}")
+            @quack_connected_on = raw_connection
           end
 
           # The attachment exposes whichever database is current in the server session. A USE
@@ -170,11 +232,14 @@ module ActiveRecord
 
         # The ATTACH that connects this client to the Quack server.
         #
-        # DISABLE_SSL matters as soon as the server address is not localhost. The client picks
-        # the scheme from the host name. Localhost means plain HTTP. Every other host name means
-        # HTTPS. But a Quack server speaks only plain HTTP. So reaching a server by a service
-        # name needs +disable_ssl: true+, or needs TLS terminated by a proxy in front of the
-        # server.
+        # The client picks the scheme from the host name. Localhost means plain HTTP. Every
+        # other host name means HTTPS. What the server speaks depends on its DuckDB version:
+        #
+        #   - DuckDB 1.5: only plain HTTP. So reaching a server by a service name needs
+        #     +disable_ssl: true+, or needs TLS terminated by a proxy in front of the server.
+        #   - DuckDB 2.0: HTTPS on any host but localhost, with a self-signed certificate unless
+        #     the server is given its own. The client trusts a self-signed certificate only when
+        #     +ssl_fingerprint+ pins it. SSL_FINGERPRINT implies HTTPS, even on localhost.
         #
         # @return [String] the ATTACH statement
         def attach_quack_sql
@@ -183,13 +248,9 @@ module ActiveRecord
           # apostrophe in a token would otherwise end the string literal early and cause a
           # parser error at connect time
           options << "TOKEN #{quote(quack_config[:token])}" if quack_config[:token].present?
-
-          disable_ssl = quack_config[:disable_ssl]
-          # This code relies on Rails' own type coercion. YAML and ENV variables pass this value
-          # as the text 'false', not as a real boolean
-          unless disable_ssl.nil?
-            options << "DISABLE_SSL #{self.class.type_cast_config_to_boolean(disable_ssl) ? "true" : "false"}"
-          end
+          options << "DISABLE_SSL #{quack_disable_ssl}" unless quack_disable_ssl.nil?
+          # DuckDB 1.5 rejects this option, so it goes out only when configured
+          options << "SSL_FINGERPRINT #{quote(quack_config[:ssl_fingerprint])}" if quack_config[:ssl_fingerprint].present?
 
           sql = "ATTACH #{quote(quack_config[:uri])} AS #{ATTACHMENT}"
           sql << " (#{options.join(", ")})" unless options.empty?
@@ -250,12 +311,23 @@ module ActiveRecord
         def quack_query_sql(sql)
           args = [quote(quack_config[:uri]), quote(sql)]
           args << "token := #{quote(quack_config[:token])}" if quack_config[:token].present?
-          disable_ssl = quack_config[:disable_ssl]
-          unless disable_ssl.nil?
-            args << "disable_ssl := #{self.class.type_cast_config_to_boolean(disable_ssl) ? "true" : "false"}"
-          end
+          args << "disable_ssl := #{quack_disable_ssl}" unless quack_disable_ssl.nil?
+          args << "ssl_fingerprint := #{quote(quack_config[:ssl_fingerprint])}" if quack_config[:ssl_fingerprint].present?
 
           "SELECT * FROM quack_query(#{args.join(", ")})"
+        end
+
+        # The configured +disable_ssl+ as SQL, or nil when it is unset.
+        #
+        # This method relies on Rails' own type coercion. YAML and ENV variables pass this value
+        # as the text 'false', not as a real boolean.
+        #
+        # @return [String, nil] 'true', 'false' or nil
+        def quack_disable_ssl
+          disable_ssl = quack_config[:disable_ssl]
+          return if disable_ssl.nil?
+
+          self.class.type_cast_config_to_boolean(disable_ssl) ? 'true' : 'false'
         end
 
         # Whether a result is the row count that Quack reports back for a funneled write

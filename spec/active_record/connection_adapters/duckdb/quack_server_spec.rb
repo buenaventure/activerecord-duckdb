@@ -139,10 +139,12 @@ RSpec.describe 'Quack funnel mode', :quack do
     end
   end
 
-  # This is the regression that makes plain DuckDB unusable behind Quack. The ATTACH step replicates
-  # the server's catalog. It also binds every column default along the way. So one computed default
-  # locks out every later connection. The connection that created the table keeps working, though.
-  # Proving the lockout needs a second connection for that reason.
+  # On DuckDB 1.5, this is the regression that makes plain DuckDB unusable behind Quack. The ATTACH
+  # step replicates the server's catalog. It also binds every column default along the way. So one
+  # computed default locks out every later connection. The connection that created the table keeps
+  # working, though. Proving the lockout needs a second connection for that reason.
+  #
+  # DuckDB 2.0 no longer binds the defaults on ATTACH, so the lockout is gone there.
   describe 'a second connection to a plain server' do
     let(:server) { QuackServer.for(:plain) }
 
@@ -163,7 +165,8 @@ RSpec.describe 'Quack funnel mode', :quack do
       [first, second].each(&:disconnect!)
     end
 
-    it 'fails naming the offending column once a computed default exists' do
+    it 'fails naming the offending column once a computed default exists',
+       skip: ('DuckDB 2.0 no longer binds column defaults on ATTACH' if ActiveRecord::ConnectionAdapters::Duckdb::Quack.connect_supported?) do
       first = new_connection
       # The adapter's own integer primary key carries the computed default in question
       first.create_table(:qk_int_pk, force: true) { |t| t.string :name }
@@ -177,6 +180,22 @@ RSpec.describe 'Quack funnel mode', :quack do
       # Undo the change on the server. Otherwise every later example against this server gets locked
       # out too. Only the server itself is still reachable at this point.
       server.run_on_server('DROP TABLE IF EXISTS qk_int_pk')
+    end
+
+    it 'shares integer primary keys across connections',
+       skip: ('DuckDB 1.5 locks out the second connection' unless ActiveRecord::ConnectionAdapters::Duckdb::Quack.connect_supported?) do
+      first = new_connection
+      first.create_table(:qk_shared_pk, force: true) { |t| t.string :name }
+      first.execute("INSERT INTO qk_shared_pk (name) VALUES ('a')")
+
+      second = new_connection
+      second.execute("INSERT INTO qk_shared_pk (name) VALUES ('b')")
+
+      expect(second.select_rows('SELECT id, name FROM qk_shared_pk ORDER BY id')).to eq([[1, 'a'], [2, 'b']])
+
+      [first, second].each(&:disconnect!)
+    ensure
+      server.run_on_server('DROP TABLE IF EXISTS qk_shared_pk')
     end
   end
 end

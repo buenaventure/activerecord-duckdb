@@ -6,6 +6,12 @@ inputs:
     description: The version of Ruby to install
     default: "3.4.2"
     required: false
+  duckdb_version:
+    description: >-
+      The DuckDB release to install, as a tag (v1.5.5, v2.0.0) or as a preview channel: a branch
+      name that artifacts.duckdb.org publishes nightly builds under, such as v2.0-cyanoptera
+    default: "v1.5.5"
+    required: false
 
 runs:
   using: composite
@@ -18,26 +24,46 @@ runs:
         sudo apt-get install -y --no-install-recommends cmake git wget
 
     - name: Install DuckDB
-      shell: sh
+      shell: bash
       env:
-        DUCKDB_VERSION: v1.5.5
+        DUCKDB_VERSION: ${{ inputs.duckdb_version }}
       run: |
-        base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
+        set -euo pipefail
+        mkdir duckdb-dist
+        cd duckdb-dist
 
-        # spec/support/quack_server.rb serves a Quack endpoint by shelling out to this binary,
-        # which is something libduckdb cannot do.
-        wget -q "${base}/duckdb_cli-linux-amd64.zip"
-        unzip -q duckdb_cli-linux-amd64.zip -d duckdb-cli
-        sudo install -m 755 duckdb-cli/duckdb /usr/local/bin/duckdb
+        # spec/support/quack_server.rb serves a Quack endpoint by shelling out to the CLI, which is
+        # something libduckdb cannot do. The duckdb gem builds its native extension against the
+        # headers and the shared library.
+        case "${DUCKDB_VERSION}" in
+          v1.*)
+            # Up to 1.5, releases ship zip files
+            base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
+            wget -q "${base}/duckdb_cli-linux-amd64.zip" "${base}/libduckdb-linux-amd64.zip"
+            unzip -q duckdb_cli-linux-amd64.zip
+            unzip -q libduckdb-linux-amd64.zip
+            ;;
+          *)
+            # From 2.0 on, releases ship tarballs, with the headers inside the shared-libs one
+            if [[ "${DUCKDB_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
+            else
+              base="https://artifacts.duckdb.org/${DUCKDB_VERSION}"
+            fi
+            wget -q "${base}/duckdb-cli-linux-amd64.tar.gz" "${base}/duckdb-shared-libs-linux-amd64.tar.gz"
+            tar -xzf duckdb-cli-linux-amd64.tar.gz
+            tar -xzf duckdb-shared-libs-linux-amd64.tar.gz
+            ;;
+        esac
 
-        # The duckdb gem builds its native extension against these.
-        wget -q "${base}/libduckdb-linux-amd64.zip"
-        unzip -q libduckdb-linux-amd64.zip -d libduckdb
-        sudo mv libduckdb/duckdb.* /usr/local/include/
-        sudo mv libduckdb/libduckdb.so /usr/local/lib/
+        sudo install -m 755 duckdb /usr/local/bin/duckdb
+        sudo cp duckdb*.h* /usr/local/include/
+        # From 2.0 on, libduckdb.so may come with versioned names and symlinks, so copy them as is
+        sudo cp -P libduckdb.so* /usr/local/lib/
         sudo ldconfig /usr/local/lib
 
-        rm -rf duckdb-cli duckdb_cli-linux-amd64.zip libduckdb libduckdb-linux-amd64.zip
+        cd ..
+        rm -rf duckdb-dist
         duckdb --version
 
     # Setup ruby and bundle install
@@ -46,3 +72,6 @@ runs:
       with:
         ruby-version: ${{ inputs.ruby_version }}
         bundler-cache: true # runs 'bundle install' and caches installed gems automatically
+        # The duckdb gem compiles against the DuckDB headers, so a build for one DuckDB must not be
+        # restored for another
+        cache-version: duckdb-${{ inputs.duckdb_version }}

@@ -11,6 +11,29 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quack do
 
   let(:quack_config) { { quack: { uri: 'quack:localhost', token: 'secret', database: 'ducklake' } } }
 
+  describe '.connect_supported?' do
+    def supported?(version) = described_class.connect_supported?(version)
+
+    it 'is false before DuckDB 2.0, where only the query() wrapper exists' do
+      expect(supported?('1.5.5')).to be(false)
+      expect(supported?('v1.5.5')).to be(false)
+    end
+
+    it 'is true from DuckDB 2.0 on' do
+      expect(supported?('2.0.0')).to be(true)
+      expect(supported?('2.1.3')).to be(true)
+    end
+
+    it 'counts the 2.0 pre-releases, which already ship CONNECT' do
+      expect(supported?('2.0.0-alpha39998')).to be(true)
+      expect(supported?('v2.0.0-dev1234')).to be(true)
+    end
+
+    it 'is false for a version it cannot read' do
+      expect(supported?('not a version')).to be(false)
+    end
+  end
+
   describe 'without a quack section in the config' do
     it 'is not in funnel mode' do
       expect(adapter).not_to be_quack
@@ -47,17 +70,42 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quack do
       expect(conn.quack_config).to eq(uri: 'quack:localhost', token: 'secret', database: 'ducklake')
     end
 
-    it 'wraps a statement into a query on the attachment' do
-      expect(conn.quack_sql('SELECT 1')).to eq("SELECT * FROM quack.query('SELECT 1')")
+    describe 'on DuckDB 1.5, which has no CONNECT' do
+      before { allow(described_class).to receive(:connect_supported?).and_return(false) }
+
+      it 'wraps a statement into a query on the attachment' do
+        expect(conn.quack_sql('SELECT 1')).to eq("SELECT * FROM quack.query('SELECT 1')")
+      end
+
+      it 'escapes quotes in the wrapped statement' do
+        expect(conn.quack_sql("SELECT 'it''s'")).to eq("SELECT * FROM quack.query('SELECT ''it''''s''')")
+      end
+
+      it 'wraps statements of every kind, not just queries' do
+        expect(conn.quack_sql('ALTER TABLE t ADD COLUMN c INTEGER'))
+          .to eq("SELECT * FROM quack.query('ALTER TABLE t ADD COLUMN c INTEGER')")
+      end
     end
 
-    it 'escapes quotes in the wrapped statement' do
-      expect(conn.quack_sql("SELECT 'it''s'")).to eq("SELECT * FROM quack.query('SELECT ''it''''s''')")
+    describe 'on DuckDB 2.0, where CONNECT forwards statements' do
+      before { allow(described_class).to receive(:connect_supported?).and_return(true) }
+
+      it 'routes with CONNECT' do
+        expect(conn).to be_quack_connect
+      end
+
+      it 'passes statements through unchanged' do
+        expect(conn.quack_sql("SELECT 'it''s'")).to eq("SELECT 'it''s'")
+      end
+
+      it 'still refuses bind parameters, which CONNECT cannot forward either' do
+        expect { conn.quack_sql('SELECT ?', [1]) }
+          .to raise_error(ActiveRecord::ConnectionAdapters::QuackBindParametersNotSupported)
+      end
     end
 
-    it 'wraps statements of every kind, not just queries' do
-      expect(conn.quack_sql('ALTER TABLE t ADD COLUMN c INTEGER'))
-        .to eq("SELECT * FROM quack.query('ALTER TABLE t ADD COLUMN c INTEGER')")
+    it 'is not connected before it has run CONNECT' do
+      expect(conn).not_to be_quack_connected
     end
 
     describe 'the ATTACH it builds' do
@@ -92,6 +140,15 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quack do
       it 'quotes the uri, so it cannot end the literal early' do
         sql = adapter(quack: quack_config[:quack].merge(uri: "quack:local'host")).attach_quack_sql
         expect(sql).to eq("ATTACH 'quack:local''host' AS quack (TOKEN 'secret')")
+      end
+
+      it 'pins the server certificate when ssl_fingerprint is set' do
+        sql = adapter(quack: quack_config[:quack].merge(ssl_fingerprint: '2B:31:F0')).attach_quack_sql
+        expect(sql).to eq("ATTACH 'quack:localhost' AS quack (TOKEN 'secret', SSL_FINGERPRINT '2B:31:F0')")
+      end
+
+      it 'omits SSL_FINGERPRINT when unconfigured, which DuckDB 1.5 would reject' do
+        expect(conn.attach_quack_sql).not_to include('SSL_FINGERPRINT')
       end
 
       it 'keeps a token from injecting further ATTACH options' do
@@ -133,6 +190,11 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Quack do
 
       it 'omits disable_ssl when unconfigured, so the client picks by hostname' do
         expect(conn.send(:quack_query_sql, 'SELECT 1')).not_to include('disable_ssl')
+      end
+
+      it 'forwards ssl_fingerprint when configured' do
+        adapter = adapter(quack: quack_config[:quack].merge(ssl_fingerprint: '2B:31:F0'))
+        expect(adapter.send(:quack_query_sql, 'SELECT 1')).to include("ssl_fingerprint := '2B:31:F0'")
       end
     end
 

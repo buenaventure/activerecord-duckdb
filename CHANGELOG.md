@@ -20,6 +20,21 @@
   attaching. To find the cause, the error probes the server through `quack_query`, which needs no
   attachment, and names the offending `database.table.column`.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
+- Prepare for DuckDB 2.0:
+  - Quack funnel mode routes statements with `CONNECT` on DuckDB 2.0 and later. DuckDB 2.0 names
+    `CONNECT` as the successor of the `quack.query('...')` wrapper, which the adapter still uses on
+    DuckDB 1.5. Both reach the same server-side call.
+  - Add `ssl_fingerprint` to the `quack:` section. From DuckDB 2.0 on, a Quack server speaks HTTPS
+    on any host but localhost, with a self-signed certificate that clients pin by its fingerprint.
+  - Keep `current_transaction_invalidation_policy` changeable after `lock_configuration`. The
+    DuckLake release for DuckDB 2.0 sets it at the start of every transaction, so the lock broke
+    every DuckLake statement with "Current transaction is aborted". Every other setting stays
+    locked. `settings.allowed_configs` adds further exemptions.
+  - On DuckDB 2.0, a Quack server no longer locks out later connections over a computed column
+    default, so integer primary keys work across connections.
+  - Allow the `duckdb` gem's 2.x releases. The gem's version follows the DuckDB library it wraps.
+  - CI installs DuckDB 2.0's new release tarballs as well as 1.x's zip files. It also runs the
+    suite against the 2.0 preview build as an early warning that does not fail the build.
 
 ### Changed
 
