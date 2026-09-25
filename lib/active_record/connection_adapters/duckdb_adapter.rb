@@ -173,6 +173,14 @@ module ActiveRecord
       # Settings that MUST be applied before loading extensions
       EARLY_SETTINGS = %i[allow_persistent_secrets allow_community_extensions].freeze
 
+      # Settings that stay changeable after lock_configuration.
+      #
+      # From DuckDB 2.0 on, DuckLake sets current_transaction_invalidation_policy on its metadata
+      # connection at the start of every transaction. A locked configuration refuses that SET. The
+      # refusal aborts DuckLake's transaction, so every DuckLake statement then fails with "Current
+      # transaction is aborted". Only this one setting is exempt. Every other setting stays locked.
+      LOCK_EXEMPT_SETTINGS = %w[current_transaction_invalidation_policy].freeze
+
       # Default DuckDB settings for secure and predictable behavior
       # Note: lock_configuration is handled separately at the end of configure_connection
       DEFAULT_SETTINGS = {
@@ -400,6 +408,8 @@ module ActiveRecord
         attach_quack
         use_database
         lock_configuration
+        # Last: from DuckDB 2.0 on, this sends every later statement to the Quack server
+        enter_quack
       end
 
       # Checks if DuckDB configuration is locked.
@@ -407,6 +417,9 @@ module ActiveRecord
       # @return [Boolean] true if configuration is locked
       def configuration_locked?
         return false unless raw_connection
+        # A connection that ran CONNECT would ask the Quack server instead of itself. It is
+        # configured already: CONNECT is the last step of #configure_connection.
+        return true if quack_connected?
 
         result = raw_connection.query("SELECT current_setting('lock_configuration')")
         result.first&.first == true
@@ -699,6 +712,8 @@ module ActiveRecord
       def apply_settings
         merged_settings.each do |key, value|
           next if EARLY_SETTINGS.include?(key)
+          # lock_configuration applies it, merged with LOCK_EXEMPT_SETTINGS
+          next if key == :allowed_configs
 
           execute_setting(key, value)
         end
@@ -793,7 +808,15 @@ module ActiveRecord
       # This should be called at the very end of configure_connection
       # @return [void]
       def lock_configuration
+        raw_connection.execute("SET allowed_configs = [#{lock_exempt_settings.map { |name| quote(name) }.join(", ")}]")
         raw_connection.execute('SET lock_configuration = true')
+      end
+
+      # Settings that stay changeable once the configuration is locked: LOCK_EXEMPT_SETTINGS plus
+      # any the config lists under +settings.allowed_configs+
+      # @return [Array<String>] Setting names
+      def lock_exempt_settings
+        (LOCK_EXEMPT_SETTINGS + Array(merged_settings[:allowed_configs]).map(&:to_s)).uniq
       end
     end
   end

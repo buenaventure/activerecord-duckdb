@@ -23,6 +23,26 @@ RSpec.describe ActiveRecord::ConnectionAdapters::DuckdbAdapter do
       end
     end
 
+    # DuckLake on DuckDB 2.0 sets this one at the start of every metadata transaction
+    it 'leaves current_transaction_invalidation_policy changeable once locked' do
+      with_memory_connection do |conn|
+        expect { conn.execute("SET current_transaction_invalidation_policy = 'STANDARD_POLICY'") }.not_to raise_error
+      end
+    end
+
+    it 'keeps every other setting locked' do
+      with_memory_connection do |conn|
+        expect { conn.execute('SET threads = 2') }.to raise_error(ActiveRecord::StatementInvalid, /configuration has been locked/)
+      end
+    end
+
+    it 'adds allowed_configs from the settings to the exempt ones' do
+      with_memory_connection(settings: { allowed_configs: ['threads'] }) do |conn|
+        expect { conn.execute('SET threads = 2') }.not_to raise_error
+        expect { conn.execute("SET current_transaction_invalidation_policy = 'STANDARD_POLICY'") }.not_to raise_error
+      end
+    end
+
     it 'applies early settings before extensions could be loaded' do
       with_memory_connection do |conn|
         expect(query_value("SELECT value FROM duckdb_settings() WHERE name = 'allow_community_extensions'", connection: conn)).to eq('false')

@@ -147,6 +147,9 @@ development:
 **Notes:**
 - `allow_persistent_secrets` and `allow_community_extensions` are applied before loading extensions
 - `lock_configuration = true` is automatically applied at the end to lock all settings
+- One setting stays changeable after the lock: `current_transaction_invalidation_policy`. From DuckDB
+  2.0 on, DuckLake sets it at the start of every transaction, and a lock that refused it would break
+  every DuckLake statement. To exempt further settings, list them under `settings.allowed_configs`
 
 #### Secrets
 
@@ -248,23 +251,38 @@ production:
     uri: quack:localhost
     token: <%= ENV["DUCKLAKE_QUACK_TOKEN"] %>
     database: ducklake
-    disable_ssl: false # true when the server is addressed by anything but localhost
+    # ssl_fingerprint: "2B:31:F0:..." # DuckDB 2.0: pins the server's self-signed certificate
 ```
 
 - `uri`: the server address, `quack:host[:port]`. The default port is 9494.
 - `token`: the server's auth token, if the server requires one.
 - `database`: the database to `USE` in the server session. The adapter then resolves unqualified
   names there.
-- `disable_ssl`: a Quack server speaks only plain HTTP. The client picks the connection scheme from
-  the hostname. For any host other than `localhost`, set this to `true`. Or put a proxy in front
-  that terminates TLS.
+- `disable_ssl`: the client picks the connection scheme from the hostname: plain HTTP for
+  `localhost`, HTTPS for any other host. A DuckDB 1.5 server speaks only plain HTTP, so for any host
+  other than `localhost` set this to `true`, or put a proxy in front that terminates TLS. A DuckDB
+  2.0 server speaks HTTPS on any host but `localhost`, so leave this unset there.
+- `ssl_fingerprint` (DuckDB 2.0): the SHA-256 fingerprint of the server's certificate. A 2.0 server
+  without a certificate of its own generates a self-signed one, which the client trusts only when
+  this pins it. The server lists its fingerprint in `quack_server_list()`. This option implies HTTPS,
+  even on `localhost`. DuckDB 1.5 rejects it.
+
+The token can come from a `quack` secret instead: set `secrets: { quack: { token: ..., scope:
+'quack:host' } }` and leave out `token`.
+
+How statements reach the server depends on the client's DuckDB version. On DuckDB 2.0 and later, the
+adapter runs `CONNECT quack` as the last step of connecting, and DuckDB forwards every later
+statement. On DuckDB 1.5, which has no `CONNECT`, the adapter wraps each statement in
+`SELECT * FROM quack.query('...')`. Both reach the same call on the server. Client and server should
+run the same DuckDB version.
 
 Both `httpfs` and `quack` are required. `quack` pulls in `httpfs` lazily. So, with autoloading off, a
 client that installs only `quack` fails on its first query, not at `LOAD`.
 
 Notes and limitations:
 
-- **No table the server serves may have a computed column default.** Attaching binds every column
+- **DuckDB 1.5 only: no table the server serves may have a computed column default.** DuckDB 2.0
+  lifts this limit, and integer primary keys work across connections there. Attaching binds every column
   default in the server's catalog. A literal default, such as `default: false` or `default: 0`,
   binds fine. A default that needs a function or an operator does not, for example `nextval()`,
   `uuid()`, or `now()`. Such a default makes every later `ATTACH` fail, so the second connection in a
