@@ -5,40 +5,30 @@ module ActiveRecord
   module ConnectionAdapters
     module Duckdb
       module DatabaseStatements
-        # SQL statements that are considered read-only (SELECT, EXPLAIN, etc.)
-        READ_QUERY_PATTERN = /\A\s*(SELECT|SHOW|DESCRIBE|EXPLAIN|PRAGMA)\b/i
+        # SQL statements that are considered read-only. Rails adds SELECT, WITH, EXPLAIN and the
+        # transaction control statements, and skips leading comments.
+        READ_QUERY_PATTERN = AbstractAdapter.build_read_query_regexp(:show, :describe, :pragma)
 
         # Begins a database transaction.
+        #
+        # Transaction control must run where the writes run. A BEGIN sent to the local client
+        # does not cover writes that reach a Quack server. Like every statement, this one goes
+        # through #duckdb_query, which sends it through the funnel, so it covers all writes.
         # @return [void]
         def begin_db_transaction
-          log('BEGIN', 'TRANSACTION') do
-            with_raw_connection do |conn|
-              # Transaction control must run where the writes run. A BEGIN sent to the local
-              # client does not cover writes that reach a Quack server. A BEGIN sent through
-              # the funnel covers all writes.
-              conn.query(quack_sql('BEGIN TRANSACTION'))
-            end
-          end
+          transaction_command('BEGIN TRANSACTION')
         end
 
         # Commits the current database transaction.
         # @return [void]
         def commit_db_transaction
-          log('COMMIT', 'TRANSACTION') do
-            with_raw_connection do |conn|
-              conn.query(quack_sql('COMMIT'))
-            end
-          end
+          transaction_command('COMMIT')
         end
 
         # Rolls back the current database transaction.
         # @return [void]
         def exec_rollback_db_transaction
-          log('ROLLBACK', 'TRANSACTION') do
-            with_raw_connection do |conn|
-              conn.query(quack_sql('ROLLBACK'))
-            end
-          end
+          transaction_command('ROLLBACK')
         end
 
         # Determines if a SQL query is a write operation (INSERT, UPDATE, DELETE, etc.)

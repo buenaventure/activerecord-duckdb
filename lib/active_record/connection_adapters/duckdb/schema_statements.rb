@@ -68,18 +68,12 @@ module ActiveRecord
             create_sequence_safely(sequence_name, table_name, start_with: start_with)
           end
 
-          # Store sequence info for later use during table creation
-          @pending_sequence_default = ({ table: table_name, column: pk_column_name, sequence: sequence_name } if needs_sequence_default && sequence_name && pk_column_name)
-
-          begin
-            # Now create the table with Rails handling the standard creation
-            super do |td|
-              # If block given, let user define columns
-              yield td if block_given?
-            end
-          ensure
-            # Clear the pending sequence default
-            @pending_sequence_default = nil
+          # Now create the table with Rails handling the standard creation
+          super do |td|
+            # SchemaCreation turns this into the primary key's DEFAULT nextval(...)
+            td.primary_key_sequence = { column: pk_column_name, sequence: sequence_name } if needs_sequence_default
+            # If block given, let user define columns
+            yield td if block_given?
           end
         end
 
@@ -331,6 +325,8 @@ module ActiveRecord
         # @param table_name [String, Symbol] The name of the table
         # @return [Array<ActiveRecord::ConnectionAdapters::IndexDefinition>] Array of index definitions
         def indexes(table_name)
+          return per_table(table_name) { |table| indexes(table) } if table_name.is_a?(Array)
+
           indexes = []
           begin
             # This filters by database_name for the same reason as #data_source_sql.
@@ -521,33 +517,19 @@ module ActiveRecord
           end
         end
 
-        # Override execute to intercept CREATE TABLE statements and inject sequence defaults
-        # @param sql [String] The SQL statement to execute
-        # @param name [String, nil] Optional name for logging purposes
-        # @return [DuckDB::Result] The result of the query execution
-        def execute(sql, name = nil)
-          # Check if this is a CREATE TABLE statement and we have a pending sequence default
-          if @pending_sequence_default && sql.match?(/\A\s*CREATE TABLE/i)
-            pending = @pending_sequence_default
-            table_pattern = /CREATE TABLE\s+"?#{Regexp.escape(pending[:table])}"?\s*\(/i
-
-            if sql.match?(table_pattern)
-              # Find the PRIMARY KEY column definition and inject the sequence default
-              # This pattern specifically looks for the primary key column with PRIMARY KEY constraint
-              pk_column_pattern = /"?#{Regexp.escape(pending[:column])}"?\s+\w+\s+PRIMARY\s+KEY(?!\s+DEFAULT)/i
-
-              # Only replace the first occurrence (the actual primary key)
-              sql = sql.sub(pk_column_pattern) do |match|
-                # Inject the sequence default before PRIMARY KEY
-                match.sub(/(\s+)PRIMARY\s+KEY/i, "\\1DEFAULT nextval(#{quote(pending[:sequence])}) PRIMARY KEY")
-              end
-            end
-          end
-
-          super
-        end
-
         private
+
+        # Answers a schema reader for many tables, one table at a time.
+        #
+        # Rails 8.2 asks the schema readers (primary_keys, indexes, table_options) about all
+        # tables of a dump at once. Given an Array of tables, a reader answers with a Hash keyed
+        # by table name. Given one table, it answers for that table alone, as before.
+        # @param tables [Array<String, Symbol>] The table names
+        # @yieldparam table [String, Symbol] One table name
+        # @return [Hash{String => Object}] The reader's answer per table
+        def per_table(tables)
+          tables.to_h { |table| [table.to_s, yield(table)] }
+        end
 
         # Parses DuckDB field information and returns a hash with all values needed
         # to construct a Column object. Used by version-specific new_column_from_field.

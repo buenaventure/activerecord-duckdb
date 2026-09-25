@@ -16,7 +16,7 @@ RSpec.shared_examples 'correct UTC timestamp handling' do
     utc_time = Time.utc(2025, 1, 15, 12, 0, 0)
     connection.execute("INSERT INTO #{table_name} VALUES (1, '2025-01-15 12:00:00')")
 
-    result = connection.send(:internal_exec_query, "SELECT recorded_at FROM #{table_name} WHERE id = 1")
+    result = connection.exec_query("SELECT recorded_at FROM #{table_name} WHERE id = 1")
     retrieved_time = result.rows.first.first
 
     expect(retrieved_time).to be_a(Time)
@@ -33,7 +33,7 @@ RSpec.shared_examples 'correct UTC timestamp handling' do
 
     connection.execute("INSERT INTO #{table_name} VALUES (1, '2025-01-15 12:00:00+00')")
 
-    result = connection.send(:internal_exec_query, "SELECT event_at FROM #{table_name} WHERE id = 1")
+    result = connection.exec_query("SELECT event_at FROM #{table_name} WHERE id = 1")
     retrieved_time = result.rows.first.first
 
     expect(retrieved_time).to be_a(Time)
@@ -57,7 +57,7 @@ RSpec.shared_examples 'correct UTC timestamp handling' do
       ts_str = original_time.strftime('%Y-%m-%d %H:%M:%S')
       connection.execute("INSERT INTO #{table_name} VALUES (#{idx}, '#{ts_str}', '#{ts_str}+00')")
 
-      result = connection.send(:internal_exec_query, "SELECT ts, tstz FROM #{table_name} WHERE id = #{idx}")
+      result = connection.exec_query("SELECT ts, tstz FROM #{table_name} WHERE id = #{idx}")
       row = result.rows.first
       ts_value = row[0]
       tstz_value = row[1]
@@ -82,7 +82,7 @@ RSpec.shared_examples 'correct local timestamp handling' do
     # Insert a timestamp without timezone info
     connection.execute("INSERT INTO #{table_name} VALUES (1, '2025-01-15 12:00:00')")
 
-    result = connection.send(:internal_exec_query, "SELECT recorded_at FROM #{table_name} WHERE id = 1")
+    result = connection.exec_query("SELECT recorded_at FROM #{table_name} WHERE id = 1")
     retrieved_time = result.rows.first.first
 
     expect(retrieved_time).to be_a(Time)
@@ -103,7 +103,7 @@ RSpec.shared_examples 'correct local timestamp handling' do
     ts_str = local_time.strftime('%Y-%m-%d %H:%M:%S')
     connection.execute("INSERT INTO #{table_name} VALUES (1, '#{ts_str}')")
 
-    result = connection.send(:internal_exec_query, "SELECT ts FROM #{table_name} WHERE id = 1")
+    result = connection.exec_query("SELECT ts FROM #{table_name} WHERE id = 1")
     retrieved_time = result.rows.first.first
 
     # The retrieved time components should match what we inserted
@@ -366,10 +366,7 @@ RSpec.describe 'Timestamp timezone handling' do
             "INSERT INTO timestamptz_offset_test VALUES (#{idx}, '2025-01-15 12:00:00#{test_case[:offset]}')"
           )
 
-          result = connection.send(
-            :internal_exec_query,
-            "SELECT tstz FROM timestamptz_offset_test WHERE id = #{idx}"
-          )
+          result = connection.exec_query("SELECT tstz FROM timestamptz_offset_test WHERE id = #{idx}")
           tstz_value = result.rows.first.first
 
           expect(tstz_value).to be_a(Time)

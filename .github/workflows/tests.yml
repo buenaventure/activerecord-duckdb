@@ -7,12 +7,13 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.ruby == 'head' }}
+    # Rails main is the upcoming Rails 8.2. Its failures are an early warning, not a blocker.
+    continue-on-error: ${{ matrix.ruby == 'head' || matrix.rails == 'main' }}
     strategy:
       fail-fast: false
       matrix:
         ruby: ["3.3.12", "3.4.10", "4.0.6", "head"]
-        rails: ["8.0", "8.1"]
+        rails: ["8.0", "8.1", "main"]
     env:
       BUNDLE_GEMFILE: gemfiles/rails_${{ matrix.rails }}.gemfile
 

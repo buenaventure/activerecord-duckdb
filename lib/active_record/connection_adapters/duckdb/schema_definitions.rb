@@ -95,6 +95,12 @@ module ActiveRecord
       class TableDefinition < ActiveRecord::ConnectionAdapters::TableDefinition
         include Duckdb::ColumnMethods
 
+        # The sequence that fills the primary key, as { column:, sequence: }. Set by
+        # SchemaStatements#create_table, and read by SchemaCreation to emit the column's
+        # DEFAULT nextval(...).
+        # @return [Hash, nil]
+        attr_accessor :primary_key_sequence
+
         # Initialize a new DuckDB table definition
         # @param conn [ActiveRecord::ConnectionAdapters::DuckdbAdapter] The database adapter
         # @param name [String, Symbol] The table name
@@ -112,25 +118,22 @@ module ActiveRecord
         end
 
         # Creates a column definition for the table
-        # Note: sequence defaults are handled by ALTER TABLE after table creation
         # @param name [String, Symbol] The column name
         # @param type [Symbol] The column type
         # @param index [Boolean, Hash, nil] Whether to create an index on this column
         # @param options [Hash] Additional column options
         # @return [void]
         def column(name, type, index: nil, **options)
-          # Don't set sequence defaults here - they're handled in create_table via ALTER TABLE
           super
         end
 
         # Creates a primary key column definition
-        # Note: sequence defaults are handled by ALTER TABLE after table creation
+        # Note: the sequence default comes from #primary_key_sequence
         # @param name [String, Symbol] The primary key column name
         # @param type [Symbol] The primary key column type (default: :primary_key)
         # @param options [Hash] Additional column options
         # @return [void]
         def primary_key(name, type = :primary_key, **options)
-          # Don't set sequence defaults here - they're handled in create_table via ALTER TABLE
           super
         end
       end

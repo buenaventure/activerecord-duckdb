@@ -3,6 +3,7 @@
 require 'active_record/connection_adapters/duckdb/compat/column_rails80'
 require 'active_record/connection_adapters/duckdb/compat/column_rails81'
 require 'active_record/connection_adapters/duckdb/compat/query_rails80'
+require 'active_record/connection_adapters/duckdb/compat/query_rails82'
 
 module ActiveRecord
   module ConnectionAdapters
@@ -35,7 +36,8 @@ module ActiveRecord
 
           # Rails 8.1 passes the cast type to the Column constructor.
           adapter.include(rails?('>= 8.1') ? ColumnRails81 : ColumnRails80)
-          adapter.include(QueryRails80)
+          # Rails 8.2 replaced raw_execute with the QueryIntent pipeline.
+          adapter.include(rails?('>= 8.2') ? QueryRails82 : QueryRails80)
         end
       end
     end

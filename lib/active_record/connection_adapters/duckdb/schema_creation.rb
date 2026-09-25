@@ -17,6 +17,38 @@ module ActiveRecord
           false
         end
 
+        # Rails' visitor dispatches on the class name, so these names have to match it.
+        # rubocop:disable Naming/MethodName
+
+        # Builds a CREATE TABLE statement. Remembers the table's primary key sequence while its
+        # columns are built.
+        # @param o [ActiveRecord::ConnectionAdapters::Duckdb::TableDefinition] The table definition
+        # @return [String] The CREATE TABLE statement
+        def visit_TableDefinition(o)
+          @primary_key_sequence = o.try(:primary_key_sequence)
+          super
+        ensure
+          @primary_key_sequence = nil
+        end
+
+        # Builds a column definition. The primary key that a sequence fills gets the sequence as its
+        # default, unless it has a default of its own.
+        #
+        # This happens here, when the SQL is built, rather than in a rewrite of the finished
+        # statement. Rails 8.2 runs a new table's statements through execute_batch, which a
+        # rewrite in #execute would never see.
+        # @param o [ActiveRecord::ConnectionAdapters::ColumnDefinition] The column definition
+        # @return [String] The column's SQL
+        def visit_ColumnDefinition(o)
+          sql = super
+          sequence = @primary_key_sequence
+          return sql unless sequence && o.primary_key? && o.name.to_s == sequence[:column].to_s
+          return sql if sql.match?(/\sDEFAULT\s/i)
+
+          sql.sub(/\s+PRIMARY\s+KEY/i, " DEFAULT nextval(#{@conn.quote(sequence[:sequence])}) PRIMARY KEY")
+        end
+        # rubocop:enable Naming/MethodName
+
         # Adds column options to SQL, with special handling for DuckDB sequence defaults
         # Override to handle nextval() defaults properly for DuckDB sequences
         # @param sql [String] The SQL string being built

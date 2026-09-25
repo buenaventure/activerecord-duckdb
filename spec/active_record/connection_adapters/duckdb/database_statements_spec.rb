@@ -7,13 +7,14 @@ require 'spec_helper'
 # This spec covers all query execution paths documented in QUERY_EXECUTION_CALL_GRAPH.md:
 #
 # 1. execute(sql, name) → DuckDB::Result
-# 2. internal_exec_query(sql, name, binds, ...) → ActiveRecord::Result
+# 2. exec_query(sql, name, binds, ...) → ActiveRecord::Result
 # 3. cast_result(raw_result) → ActiveRecord::Result
 # 4. affected_rows(raw_result) → Integer
 # 5. exec_delete(sql, name, binds) → Integer
-# 6. exec_update (alias of exec_delete)
-# 7. exec_query → delegates to internal_exec_query (Rails base class)
-# 8. exec_insert → handled by Rails base class via sql_for_insert
+# 6. exec_update → Integer
+# 7. exec_insert → handled by the Rails base class
+#
+# Every path reaches the adapter through perform_query (see Duckdb::Compat).
 
 RSpec.describe 'DatabaseStatements' do
   let(:connection) { ActiveRecord::Base.connection }
@@ -82,9 +83,9 @@ RSpec.describe 'DatabaseStatements' do
     end
   end
 
-  describe '#internal_exec_query' do
+  describe '#exec_query' do
     it 'returns an ActiveRecord::Result' do
-      result = connection.internal_exec_query('SELECT * FROM statement_test')
+      result = connection.exec_query('SELECT * FROM statement_test')
 
       expect(result).to be_a(ActiveRecord::Result)
       expect(result.columns).to include('id', 'name', 'age', 'active')
@@ -92,14 +93,14 @@ RSpec.describe 'DatabaseStatements' do
     end
 
     it 'executes queries without bind parameters' do
-      result = connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
+      result = connection.exec_query('SELECT name FROM statement_test WHERE id = 1')
 
       expect(result.rows.first).to eq(['Alice'])
     end
 
     it 'executes queries with bind parameters' do
       bind = ActiveRecord::Relation::QueryAttribute.new('id', 1, ActiveRecord::Type::Integer.new)
-      result = connection.internal_exec_query(
+      result = connection.exec_query(
         'SELECT name FROM statement_test WHERE id = ?',
         'SQL',
         [bind]
@@ -113,7 +114,7 @@ RSpec.describe 'DatabaseStatements' do
         ActiveRecord::Relation::QueryAttribute.new('age', 25, ActiveRecord::Type::Integer.new),
         ActiveRecord::Relation::QueryAttribute.new('active', true, ActiveRecord::Type::Boolean.new)
       ]
-      result = connection.internal_exec_query(
+      result = connection.exec_query(
         'SELECT name FROM statement_test WHERE age >= ? AND active = ?',
         'SQL',
         binds
@@ -122,11 +123,8 @@ RSpec.describe 'DatabaseStatements' do
       expect(result.rows.length).to eq(2) # Alice (25, true) and Charlie (35, true)
     end
 
-    it 'accepts all Rails version keyword arguments' do
-      # Test that the method accepts all kwargs without error
-      kwargs = { prepare: false, async: false, allow_retry: false, materialize_transactions: true }
-
-      result = connection.internal_exec_query('SELECT 1', 'SQL', [], **kwargs)
+    it 'accepts the prepare keyword argument' do
+      result = connection.exec_query('SELECT 1', 'SQL', [], prepare: false)
 
       expect(result).to be_a(ActiveRecord::Result)
     end
@@ -186,6 +184,9 @@ RSpec.describe 'DatabaseStatements' do
   end
 
   describe '#exec_delete' do
+    # Rails 8.2 deprecates this method. It still has to work until Rails removes it.
+    around { |example| ActiveRecord.deprecator.silence(&example) }
+
     it 'returns the number of deleted rows' do
       count = connection.exec_delete("DELETE FROM statement_test WHERE name = 'Alice'")
 
@@ -223,6 +224,9 @@ RSpec.describe 'DatabaseStatements' do
   end
 
   describe '#exec_update' do
+    # Rails 8.2 deprecates this method. It still has to work until Rails removes it.
+    around { |example| ActiveRecord.deprecator.silence(&example) }
+
     it 'behaves the same as exec_delete' do
       # They're separate methods in the base class but behave identically:
       # both return integer row counts
@@ -248,14 +252,14 @@ RSpec.describe 'DatabaseStatements' do
       expect(count).to eq(1)
 
       # Verify the update worked
-      result = connection.internal_exec_query("SELECT age FROM statement_test WHERE name = 'Alice'")
+      result = connection.exec_query("SELECT age FROM statement_test WHERE name = 'Alice'")
       expect(result.rows.first.first).to eq(50)
     end
   end
 
   describe 'Rails base class delegation' do
     describe '#exec_query' do
-      it 'delegates to internal_exec_query and returns ActiveRecord::Result' do
+      it 'returns ActiveRecord::Result' do
         result = connection.exec_query('SELECT * FROM statement_test')
 
         expect(result).to be_a(ActiveRecord::Result)
@@ -271,6 +275,9 @@ RSpec.describe 'DatabaseStatements' do
     end
 
     describe '#exec_insert' do
+      # Rails 8.2 deprecates this method. It still has to work until Rails removes it.
+      around { |example| ActiveRecord.deprecator.silence(&example) }
+
       it 'inserts records and returns the result with RETURNING' do
         result = connection.exec_insert(
           "INSERT INTO statement_test (id, name, age, active) VALUES (4, 'Diana', 28, true)",
@@ -323,7 +330,7 @@ RSpec.describe 'DatabaseStatements' do
       end
     end
 
-    describe 'read operations (internal_exec_query path)' do
+    describe 'read operations (exec_query path)' do
       it 'finds records by id' do
         record = model_class.find(1)
 
@@ -377,13 +384,13 @@ RSpec.describe 'DatabaseStatements' do
 
   describe 'edge cases and error handling' do
     it 'handles queries returning many columns' do
-      result = connection.internal_exec_query('SELECT id, name, age, active FROM statement_test')
+      result = connection.exec_query('SELECT id, name, age, active FROM statement_test')
 
       expect(result.columns.length).to eq(4)
     end
 
     it 'handles queries with aliases' do
-      result = connection.internal_exec_query(
+      result = connection.exec_query(
         'SELECT id AS user_id, name AS username FROM statement_test'
       )
 
@@ -393,7 +400,7 @@ RSpec.describe 'DatabaseStatements' do
     it 'handles NULL values' do
       connection.execute('INSERT INTO statement_test VALUES (100, NULL, NULL, NULL)')
 
-      result = connection.internal_exec_query('SELECT * FROM statement_test WHERE id = 100')
+      result = connection.exec_query('SELECT * FROM statement_test WHERE id = 100')
 
       expect(result.rows.first).to eq([100, nil, nil, nil])
     end
@@ -401,7 +408,7 @@ RSpec.describe 'DatabaseStatements' do
     it 'handles special characters in string values' do
       connection.execute("INSERT INTO statement_test VALUES (101, 'O''Brien', 45, true)")
 
-      result = connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 101')
+      result = connection.exec_query('SELECT name FROM statement_test WHERE id = 101')
 
       expect(result.rows.first.first).to eq("O'Brien")
     end
@@ -432,17 +439,38 @@ RSpec.describe 'DatabaseStatements' do
       expect(result.to_a).not_to be_empty
     end
 
-    it 'allows a SELECT through internal_exec_query' do
+    it 'allows a SELECT through exec_query' do
       result = preventing_writes do
-        connection.internal_exec_query('SELECT name FROM statement_test WHERE id = 1')
+        connection.exec_query('SELECT name FROM statement_test WHERE id = 1')
       end
 
       expect(result.rows.first.first).to eq('Alice')
     end
 
+    it 'allows a SELECT behind a leading comment' do
+      result = preventing_writes { connection.execute('/* app:reports */ SELECT * FROM statement_test') }
+
+      expect(result.to_a.length).to eq(3)
+    end
+
+    it 'allows a transaction around reads' do
+      # The BEGIN and COMMIT pass the same guard as every other statement.
+      names = preventing_writes do
+        connection.transaction { connection.select_values('SELECT name FROM statement_test ORDER BY id') }
+      end
+
+      expect(names).to eq(%w[Alice Bob Charlie])
+    end
+
     it 'rejects an INSERT' do
       expect do
         preventing_writes { connection.execute("INSERT INTO statement_test VALUES (5, 'Eve', 22, true)") }
+      end.to raise_error(ActiveRecord::ReadOnlyError)
+    end
+
+    it 'rejects an INSERT behind a leading comment' do
+      expect do
+        preventing_writes { connection.execute("/* app */ INSERT INTO statement_test VALUES (5, 'Eve', 22, true)") }
       end.to raise_error(ActiveRecord::ReadOnlyError)
     end
 

@@ -21,6 +21,15 @@ module ActiveRecord
           def perform_query(raw_connection, sql, binds, type_casted_binds, prepare:, notification_payload:, batch:)
             duckdb_query(raw_connection, sql, type_casted_binds)
           end
+
+          private
+
+          # Runs a transaction control statement through the Rails query pipeline.
+          # @param sql [String] BEGIN, COMMIT or ROLLBACK
+          # @return [void]
+          def transaction_command(sql)
+            internal_execute(sql, 'TRANSACTION', materialize_transactions: false)
+          end
         end
       end
     end
