@@ -42,33 +42,16 @@ module ActiveRecord
         end
 
         # Determines if a SQL query is a write operation (INSERT, UPDATE, DELETE, etc.)
-        # Used for read replica support and transaction tracking.
+        # Rails' own readonly guard asks this before it runs a statement, so a read passes on a
+        # connection that prevents writes. Also used for transaction tracking.
         # @param sql [String] The SQL query to check
         # @return [Boolean] true if the query modifies data
         def write_query?(sql)
           !READ_QUERY_PATTERN.match?(sql)
         end
 
-        # Executes a SQL statement against the DuckDB database.
-        # Used for DDL and raw SQL execution.
-        # @param sql [String] The SQL statement to execute
-        # @param name [String, nil] Optional name for logging purposes
-        # @return [DuckDB::Result] The result of the query execution
-        def execute(sql, name = nil) # :nodoc:
-          # Check for write queries on read-only connections (replica support)
-          # Rails 8.1+ uses ensure_writes_are_allowed, earlier versions use check_if_write_query
-          ensure_write_query_allowed(sql)
-          sql = quack_sql(sql)
-
-          log(sql, name) do
-            with_raw_connection do |conn|
-              conn.query(sql)
-            end
-          end
-        end
-
         # Casts a DuckDB result to ActiveRecord::Result format.
-        # Used by Rails 8.0+ internal_exec_query which calls cast_result(raw_execute(...)).
+        # Rails calls this with the result of #perform_query (see Duckdb::Compat).
         # @param result [DuckDB::Result, nil] The DuckDB result to cast
         # @return [ActiveRecord::Result] The ActiveRecord-compatible result
         def cast_result(result)
@@ -88,8 +71,7 @@ module ActiveRecord
         end
 
         # Returns the number of affected rows from a raw DuckDB result.
-        # Required by Rails 8.0+ for exec_delete/exec_update via internal_execute.
-        # The base class calls affected_rows(raw_execute(...)) for DELETE/UPDATE operations.
+        # Rails calls this with the result of #perform_query for DELETE and UPDATE statements.
         # @param raw_result [DuckDB::Result] The raw DuckDB result
         # @return [Integer] Number of rows affected
         def affected_rows(raw_result)
@@ -120,26 +102,20 @@ module ActiveRecord
 
         private
 
-        # Ensures write queries are allowed on the current connection.
-        # Handles API differences between Rails versions:
-        # - Rails 8.1+: Uses ensure_writes_are_allowed
-        # - Rails 8.0: Uses check_if_write_query + mark_transaction_written_if_write
-        #
-        # The two APIs divide the work differently. Rails 8.0's check_if_write_query asks
-        # write_query? itself, so it is safe to hand it every statement. Rails 8.1 moved that
-        # decision to the caller: ensure_writes_are_allowed raises whenever the connection prevents
-        # writes, whatever the SQL. Both call sites here pass reads as well as writes, so the
-        # write_query? guard has to sit in front of it - otherwise a SELECT or a PRAGMA raises
-        # ActiveRecord::ReadOnlyError under a reading role.
-        # @param sql [String] The SQL query to check
-        def ensure_write_query_allowed(sql)
-          if respond_to?(:ensure_writes_are_allowed, true)
-            # Rails 8.1+
-            ensure_writes_are_allowed(sql) if write_query?(sql)
+        # Runs a statement on the raw DuckDB connection. Every Rails version reaches this through
+        # its own #perform_query hook (see Duckdb::Compat), after logging, retries, the readonly
+        # guard and the query transformers are set up.
+        # @param raw_connection [DuckDB::Connection] The connection to run the statement on
+        # @param sql [String] The statement
+        # @param type_casted_binds [Array] Bind values as DuckDB receives them
+        # @return [DuckDB::Result] The raw DuckDB result
+        def duckdb_query(raw_connection, sql, type_casted_binds)
+          sql = quack_sql(sql, type_casted_binds)
+
+          if type_casted_binds.empty?
+            raw_connection.query(sql)
           else
-            # Rails 8.0
-            check_if_write_query(sql)
-            mark_transaction_written_if_write(sql)
+            raw_connection.query(sql, *type_casted_binds)
           end
         end
       end

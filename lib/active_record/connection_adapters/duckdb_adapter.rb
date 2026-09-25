@@ -5,6 +5,7 @@ require 'active_record'
 require 'active_record/connection_adapters/abstract_adapter'
 
 require 'active_record/connection_adapters/duckdb/column'
+require 'active_record/connection_adapters/duckdb/compat'
 require 'active_record/connection_adapters/duckdb/type/interval'
 require 'active_record/connection_adapters/duckdb/database_limits'
 require 'active_record/connection_adapters/duckdb/database_statements'
@@ -67,21 +68,8 @@ module ActiveRecord
       # This must come after DatabaseStatements. It overrides #affected_rows for funneled writes.
       include Duckdb::Quack
 
-      # Use raw_execute, let base class handle internal_exec_query.
-      require 'active_record/connection_adapters/duckdb/database_statements_rails8'
-      include Duckdb::DatabaseStatementsRails8
-
-      # Include Rails version-specific schema statements.
-      # Rails 8.1+: Column constructor includes cast_type parameter.
-      # Rails 8.0: Column constructor without cast_type parameter.
-      if ActiveRecord::VERSION::MAJOR > 8 ||
-         (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
-        require 'active_record/connection_adapters/duckdb/schema_statements_rails81'
-        include Duckdb::SchemaStatementsRails81
-      else
-        require 'active_record/connection_adapters/duckdb/schema_statements_rails80'
-        include Duckdb::SchemaStatementsRails80
-      end
+      # Includes the modules for the loaded Rails version. See Duckdb::Compat.
+      include Duckdb::Compat
 
       # Allow customization of primary key type like PostgreSQL and MySQL adapters do
       class_attribute :primary_key_type, default: :bigint

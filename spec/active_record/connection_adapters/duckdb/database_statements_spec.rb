@@ -413,10 +413,8 @@ RSpec.describe 'DatabaseStatements' do
     end
   end
 
-  # Rails 8.1 moved the write_query? decision out of the readonly guard: its
-  # ensure_writes_are_allowed raises for any SQL once the connection prevents writes, where Rails
-  # 8.0's check_if_write_query asked write_query? first. Both execute paths here hand the guard
-  # every statement, so reads have to stay allowed on a connection that prevents writes.
+  # Rails' own readonly guard runs before every statement reaches the adapter. The guard asks the
+  # adapter's write_query?, so reads have to stay allowed on a connection that prevents writes.
   describe 'readonly connections' do
     # `around` runs before the outer `before`, so connection is not set yet - each example wraps
     # its own statement instead. The switch lives on the model class, not on the adapter.

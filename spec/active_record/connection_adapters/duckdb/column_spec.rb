@@ -3,8 +3,7 @@
 require 'spec_helper'
 
 # Load version-specific column builder
-if ActiveRecord::VERSION::MAJOR > 8 ||
-   (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
+if ActiveRecord::ConnectionAdapters::Duckdb::Compat.rails?('>= 8.1')
   require_relative '../../../support/column_builder_rails81'
 else
   require_relative '../../../support/column_builder_rails80'
@@ -12,8 +11,7 @@ end
 
 RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::Column do
   # Include version-specific column builder
-  if ActiveRecord::VERSION::MAJOR > 8 ||
-     (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
+  if ActiveRecord::ConnectionAdapters::Duckdb::Compat.rails?('>= 8.1')
     include ColumnBuilderRails81
   else
     include ColumnBuilderRails80
