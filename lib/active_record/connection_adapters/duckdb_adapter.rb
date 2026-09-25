@@ -5,6 +5,7 @@ require 'active_record'
 require 'active_record/connection_adapters/abstract_adapter'
 
 require 'active_record/connection_adapters/duckdb/column'
+require 'active_record/connection_adapters/duckdb/compat'
 require 'active_record/connection_adapters/duckdb/type/interval'
 require 'active_record/connection_adapters/duckdb/database_limits'
 require 'active_record/connection_adapters/duckdb/database_statements'
@@ -67,28 +68,8 @@ module ActiveRecord
       # This must come after DatabaseStatements. It overrides #affected_rows for funneled writes.
       include Duckdb::Quack
 
-      # Include Rails version-specific database statements.
-      # Rails 8.0+: Use raw_execute, let base class handle internal_exec_query.
-      # Rails 7.2: Must implement internal_exec_query directly.
-      if ActiveRecord::VERSION::MAJOR >= 8
-        require 'active_record/connection_adapters/duckdb/database_statements_rails8'
-        include Duckdb::DatabaseStatementsRails8
-      else
-        require 'active_record/connection_adapters/duckdb/database_statements_rails72'
-        include Duckdb::DatabaseStatementsRails72
-      end
-
-      # Include Rails version-specific schema statements.
-      # Rails 8.1+: Column constructor includes cast_type parameter.
-      # Rails 7.2/8.0: Column constructor without cast_type parameter.
-      if ActiveRecord::VERSION::MAJOR > 8 ||
-         (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
-        require 'active_record/connection_adapters/duckdb/schema_statements_rails81'
-        include Duckdb::SchemaStatementsRails81
-      else
-        require 'active_record/connection_adapters/duckdb/schema_statements_rails80'
-        include Duckdb::SchemaStatementsRails80
-      end
+      # Includes the modules for the loaded Rails version. See Duckdb::Compat.
+      include Duckdb::Compat
 
       # Allow customization of primary key type like PostgreSQL and MySQL adapters do
       class_attribute :primary_key_type, default: :bigint
@@ -368,10 +349,13 @@ module ActiveRecord
       end
 
       # Returns the primary key columns for a table
-      # @param table_name [String] The name of the table
-      # @return [Array<String>] Array of primary key column names
+      # @param table_name [String, Array<String>] The name of the table, or an Array of names
+      # @return [Array<String>, Hash{String => Array<String>}] Array of primary key column names,
+      #   or a Hash of them keyed by table name when given an Array
       # @raise [ArgumentError] if table_name is blank
       def primary_keys(table_name) # :nodoc:
+        return per_table(table_name) { |table| primary_keys(table) } if table_name.is_a?(Array)
+
         raise ArgumentError, 'table_name cannot be blank' unless table_name.present?
 
         results = execute("PRAGMA table_info(#{quote(table_name.to_s)})", 'SCHEMA')
@@ -577,8 +561,10 @@ module ActiveRecord
       end
 
       # Returns indexes for a table or all tables
-      # @param table_name [String, nil] The table name, or nil for all tables
-      # @return [Array] Array of index definitions
+      # @param table_name [String, Array<String>, nil] The table name, an Array of names, or nil
+      #   for all tables
+      # @return [Array, Hash] Array of index definitions, or a Hash of them keyed by table name
+      #   when given an Array
       def indexes(table_name = nil)
         if table_name
           # Delegate to the schema statements implementation
@@ -621,9 +607,12 @@ module ActiveRecord
       end
 
       # Returns table options for schema dumping
-      # @param table_name [String] The name of the table
-      # @return [Hash] Hash of table options for schema dumping
+      # @param table_name [String, Array<String>] The name of the table, or an Array of names
+      # @return [Hash] Hash of table options for schema dumping, or a Hash of them keyed by table
+      #   name when given an Array
       def table_options(table_name)
+        return per_table(table_name) { |table| table_options(table) } if table_name.is_a?(Array)
+
         options = {}
 
         # Check if primary key has sequence default

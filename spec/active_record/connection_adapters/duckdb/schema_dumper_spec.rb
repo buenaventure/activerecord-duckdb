@@ -376,8 +376,9 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
       require 'fileutils'
       FileUtils.mkdir_p(File.join(temp_dir, 'data'))
       ActiveRecord::Base.establish_connection(ducklake_config)
-      ActiveRecord::SchemaDumper.ignore_tables = [/^ducklake_/]
     end
+
+    around { |example| with_schema_ignored_tables([/^ducklake_/], &example) }
 
     after do
       ActiveRecord::Base.remove_connection if ActiveRecord::Base.connected?

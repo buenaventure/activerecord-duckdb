@@ -1,7 +1,16 @@
 ## [Unreleased]
 
+### Removed
+
+- Remove Rails 7.2 support. Rails 7.2 reached end of life in August 2026. The gem now requires
+  ActiveRecord `>= 8.0, < 8.3`.
+
 ### Added
 
+- Add support for Rails 8.2, tested against Rails `main` until 8.2 is released. Rails 8.2
+  replaces `raw_execute` with the `QueryIntent` pipeline, and its schema dumper asks
+  `primary_keys`, `indexes`, and `table_options` about many tables at once. Given an Array of
+  tables, these readers now answer with a Hash keyed by table name.
 - Add Quack funnel mode. A `quack:` section on the database config points at a DuckDB server that
   serves DuckLake over the Quack client/server protocol. The adapter funnels every statement to it.
   See the README.
@@ -11,6 +20,19 @@
   attaching. To find the cause, the error probes the server through `quack_query`, which needs no
   attachment, and names the offending `database.table.column`.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
+
+### Changed
+
+- Run every statement through Rails' own query pipeline. The adapter now implements only
+  `perform_query`. Rails supplies the logging, retries, query transformers, and the readonly
+  guard. This includes `BEGIN`, `COMMIT`, and `ROLLBACK`. The query log now shows the statement
+  the application issued, not the Quack funnel wrapper around it.
+- Put the version-specific code in one place, `Duckdb::Compat`. See
+  `docs/RAILS_QUERY_EXECUTION.md`.
+- `write_query?` uses Rails' read query pattern. A read behind a leading SQL comment, a `WITH`
+  query, and transaction control now pass on a connection that prevents writes.
+- Emit the primary key's `DEFAULT nextval(...)` when the `CREATE TABLE` statement is built. The
+  adapter no longer rewrites the finished statement in `#execute`.
 
 ### Fixed
 
