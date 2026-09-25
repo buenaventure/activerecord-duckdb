@@ -10,6 +10,8 @@ Activerecord::Duckdb providers DuckDB database access for Ruby on Rails applicat
 
 ## Requirements
 
+This gem supports Rails (ActiveRecord) 8.0 and 8.1. Rails 8.2 is tested against Rails `main` ahead of its release. See [docs/RAILS_QUERY_EXECUTION.md](docs/RAILS_QUERY_EXECUTION.md) for how the adapter handles the differences between Rails versions.
+
 This gem relies on the [ruby-duckdb](https://github.com/suketa/ruby-duckdb) ruby gem as its database adapter. Thus it provides a seamless integration with the DuckDB database.
 
 Both gems requires that you have [duckdb](https://duckdb.org). DuckDB has many installation options available that can be found on their [installation page](https://duckdb.org/docs/installation/).

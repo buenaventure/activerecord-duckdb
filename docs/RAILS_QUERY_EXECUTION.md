@@ -1,131 +1,124 @@
-# Rails Query Execution Architecture
+# Rails Version Compatibility
 
-This document summarizes how query execution works across supported Rails versions (7.2, 8.0, 8.1) and how the DuckDB adapter integrates with it.
+This document explains how the DuckDB adapter supports several Rails versions (8.0, 8.1, and the unreleased 8.2 on Rails `main`) from a single codebase.
 
-## Query Execution Call Structure
+## Approach
 
-### Rails 7.2
+Almost all of the adapter does not depend on the Rails version: quoting, schema introspection, the schema dumper, DuckLake and the Quack funnel. Rails' own internal APIs do change between minor versions, though. Where one changed, a small module under `lib/active_record/connection_adapters/duckdb/compat/` fills the gap, and `Duckdb::Compat` picks one module per gap.
 
+`Duckdb::Compat` is the only place that reads `ActiveRecord::VERSION`:
+
+```ruby
+# lib/active_record/connection_adapters/duckdb/compat.rb
+RAILS_VERSION = Gem::Version.new(ActiveRecord::VERSION::STRING).release  # 8.2.0.alpha counts as 8.2
+
+def self.included(adapter)
+  adapter.include(rails?('>= 8.1') ? ColumnRails81 : ColumnRails80)
+  adapter.include(rails?('>= 8.2') ? QueryRails82 : QueryRails80)
+end
 ```
-Model.find_by(...) / Model.create(...)
-  └── select_all / insert
-        └── internal_exec_query(sql, name, binds, prepare:, async:, allow_retry:)
-              └── [Adapter must implement - base class raises NotImplementedError]
-```
 
-**Key point:** Adapters MUST implement `internal_exec_query` in Rails 7.2.
+| Rails | Query execution | Column constructor |
+|-------|-----------------|--------------------|
+| 8.0 | `Compat::QueryRails80` | `Compat::ColumnRails80` |
+| 8.1 | `Compat::QueryRails80` | `Compat::ColumnRails81` |
+| 8.2 | `Compat::QueryRails82` | `Compat::ColumnRails81` |
+
+Rails 7.2 is not supported. It reached end of life in August 2026.
+
+## Query Execution
+
+The adapter hands every statement to Rails' query pipeline and only implements the lowest hook, `perform_query`. Rails does the logging, retries, warning handling, query transformers, and the readonly guard. The actual DuckDB call lives in one shared private method, `DatabaseStatements#duckdb_query`. It wraps the statement for the Quack funnel (`quack_sql`) and runs it on the raw connection.
 
 ### Rails 8.0 / 8.1
 
 ```
-Model.find_by(...) / Model.create(...)
-  └── select_all / insert
-        └── internal_exec_query(...)  # Default implementation provided
-              └── cast_result(internal_execute(...))
-                    └── raw_execute(...)
-                          └── perform_query(raw_connection, sql, binds, ...)
-                                └── [Adapter should implement]
+execute / exec_query / select_all / insert / ...
+  └── internal_execute(sql, ...)            # readonly guard (write_query?), query transformers
+        └── raw_execute(sql, ...)           # log, with_raw_connection, retries, warnings
+              └── perform_query(raw_connection, sql, binds, type_casted_binds, prepare:, notification_payload:, batch:)
+                    └── duckdb_query(raw_connection, sql, type_casted_binds)     # Compat::QueryRails80
 ```
 
-**Key point:** Rails 8.0+ provides a default `internal_exec_query` that delegates to `perform_query`. However, adapters can still override `internal_exec_query` directly.
+### Rails 8.2
 
-## DuckDB Adapter Implementation
+Rails 8.2 removed `raw_execute`, `internal_execute`, and `internal_exec_query`. Every statement is a `QueryIntent`:
 
-The adapter uses **version-specific modules** to integrate optimally with each Rails version:
-
-| Rails Version | Query Execution | Schema Statements |
-|--------------|-----------------|-------------------|
-| 7.2 | `DatabaseStatementsRails72` | `SchemaStatementsRails80` |
-| 8.0 | `DatabaseStatementsRails8` | `SchemaStatementsRails80` |
-| 8.1 | `DatabaseStatementsRails8` | `SchemaStatementsRails81` |
-
-### Query Execution Strategy
-
-- **Rails 7.2**: Implements `internal_exec_query` (required - base class raises `NotImplementedError`)
-- **Rails 8.0+**: Implements `raw_execute`, lets base class handle `internal_exec_query`
-
-This allows Rails 8.x to use its native query infrastructure (logging, retries, async support).
-
-### Module Loading
-
-```ruby
-# In duckdb_adapter.rb
-if ActiveRecord::VERSION::MAJOR >= 8
-  require 'active_record/connection_adapters/duckdb/database_statements_rails8'
-  include Duckdb::DatabaseStatementsRails8
-else
-  require 'active_record/connection_adapters/duckdb/database_statements_rails72'
-  include Duckdb::DatabaseStatementsRails72
-end
+```
+execute / exec_query / select_all / query_command / execute_batch / ...
+  └── QueryIntent#execute!
+        └── #processed_sql                  # readonly guard (write_query?), query transformers
+        └── execute_intent(intent)          # instrumentation, retries, warnings
+              └── perform_query(raw_connection, intent)
+                    └── duckdb_query(raw_connection, intent.processed_sql, intent.type_casted_binds)  # Compat::QueryRails82
+                    └── verified!
 ```
 
-## Column Class Signature Change (Rails 8.1)
+Rails 8.2 no longer marks the connection as verified after each query. `QueryRails82#perform_query` calls `verified!` itself, as the adapters that ship with Rails do.
 
-Rails 8.1 introduced a breaking change to the `Column` class:
+### Transactions
+
+`BEGIN`, `COMMIT`, and `ROLLBACK` go through the same pipeline. `transaction_command` uses `internal_execute` on 8.0/8.1 and `query_command` on 8.2, because Rails 8.2 deprecates `log`. So transaction control reaches a Quack server through the funnel, just as the writes do.
+
+### Readonly Guard
+
+Rails asks the adapter's `write_query?` before it runs a statement on a connection that prevents writes. `write_query?` uses Rails' own read query pattern (`AbstractAdapter.build_read_query_regexp(:show, :describe, :pragma)`). That pattern treats `SELECT`, `WITH`, `EXPLAIN`, transaction control, `SHOW`, `DESCRIBE`, and `PRAGMA` as reads, and it skips leading comments.
+
+## Column Constructor (Rails 8.1)
+
+Rails 8.1 added the cast type to the `Column` constructor:
 
 ```ruby
-# Rails 7.2 / 8.0
+# Rails 8.0
 def initialize(name, default, sql_type_metadata, null, default_function, ...)
 
 # Rails 8.1+
 def initialize(name, cast_type, default, sql_type_metadata, null, default_function, ...)
 ```
 
-The adapter handles this with version-specific schema statement modules:
+`Compat::ColumnRails80` and `Compat::ColumnRails81` each implement `new_column_from_field` with the matching signature. Both read the field through the shared `column_info_from_field`.
 
-```ruby
-# In duckdb_adapter.rb
-if ActiveRecord::VERSION::MAJOR > 8 ||
-   (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
-  require 'active_record/connection_adapters/duckdb/schema_statements_rails81'
-  include Duckdb::SchemaStatementsRails81
-else
-  require 'active_record/connection_adapters/duckdb/schema_statements_rails80'
-  include Duckdb::SchemaStatementsRails80
-end
-```
+## Other Rails 8.2 Changes
 
-Each module implements `new_column_from_field` with the correct Column constructor signature.
+These needed no compat module, because the new behaviour works on every supported version:
+
+- **Batched schema readers.** The Rails 8.2 schema dumper asks `primary_keys`, `indexes`, and `table_options` about all tables at once, passing an Array of table names. Given an Array, these readers answer with a Hash keyed by table name. `columns` falls back to `column_definitions` per table in Rails itself.
+- **`create_table` runs through `execute_batch`.** The primary key's `DEFAULT nextval(...)` is therefore emitted by `SchemaCreation` when it builds the column, not by rewriting the finished `CREATE TABLE` statement.
+- **Deprecations.** `exec_insert`, `exec_delete`, and `exec_update` are deprecated in 8.2. The adapter does not call them.
+
+## Adding a New Rails Version
+
+1. Add an appraisal (for an unreleased version, point it at `github: 'rails/rails', branch: 'main'`) and run `bundle exec appraisal install`.
+2. Add the version to the `rails` matrix in `.github/workflows/tests.yml`.
+3. Run the suite against it. For each Rails API that changed, add a module under `compat/` and pick it in `Compat.included`. If the new behaviour also works on the older versions, change the shared code instead.
+
+### When to Reconsider Separate Branches
+
+The single codebase pays off while the compat modules stay small next to the shared code. Today they are four modules of a few lines each. If a future Rails version needs compat code comparable in size to the shared code, maintaining a branch and gem version per Rails version becomes the cheaper option.
 
 ## Testing with Appraisal
-
-Run tests against all Rails versions:
 
 ```bash
 # All versions
 bundle exec appraisal rspec
 
 # Specific version
-bundle exec appraisal rails-7.2 rspec
 bundle exec appraisal rails-8.0 rspec
 bundle exec appraisal rails-8.1 rspec
+bundle exec appraisal rails-main rspec
 ```
-
-## Related Methods
-
-| Method | Purpose | Module |
-|--------|---------|--------|
-| `internal_exec_query` | Execute query, return ActiveRecord::Result | Rails 7.2 only |
-| `raw_execute` | Low-level query execution | Rails 8.0+ only |
-| `execute` | Direct SQL execution, returns raw DuckDB result | Shared |
-| `cast_result` | Convert DuckDB result to ActiveRecord::Result | Shared |
-| `affected_rows` | Get row count from raw result | Shared |
-| `new_column_from_field` | Create Column object from DB field info | Rails 8.0 / 8.1 |
 
 ## File Structure
 
 ```
 lib/active_record/connection_adapters/duckdb/
-├── database_statements.rb          # Shared: execute, cast_result, affected_rows
-├── database_statements_rails72.rb  # Rails 7.2: internal_exec_query, exec_delete
-├── database_statements_rails8.rb   # Rails 8.0+: raw_execute
-├── schema_statements.rb            # Shared schema operations
-├── schema_statements_rails80.rb    # Rails 7.2/8.0: new_column_from_field
-└── schema_statements_rails81.rb    # Rails 8.1+: new_column_from_field (with cast_type)
+├── compat.rb                       # Picks the modules for the loaded Rails version
+├── compat/
+│   ├── column_rails80.rb           # Rails 8.0: new_column_from_field
+│   ├── column_rails81.rb           # Rails 8.1+: new_column_from_field (with cast_type)
+│   ├── query_rails80.rb            # Rails 8.0/8.1: perform_query(raw_connection, sql, ...)
+│   └── query_rails82.rb            # Rails 8.2+: perform_query(raw_connection, intent)
+├── database_statements.rb          # Shared: duckdb_query, cast_result, affected_rows, write_query?
+├── schema_creation.rb              # Shared: primary key sequence default
+└── schema_statements.rb            # Shared schema operations
 ```
-
-## Future Considerations
-
-1. **`write_query?` implementation** - Currently returns `false`. Should probably return `true` for INSERT/UPDATE/DELETE to properly invalidate caches.
-
-2. **SQLite3 adapter reference** - The SQLite3 adapter in Rails is a good reference implementation for in-process database adapters.
