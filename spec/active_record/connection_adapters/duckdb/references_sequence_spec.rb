@@ -334,10 +334,12 @@ RSpec.describe 'References Sequence Fix' do
 
         sequence_name = 'seq_reset_test_id_seq'
         # This should convert '100' to integer 100, not raise a SQL injection issue
-        # DuckDB will raise "ALTER SEQUENCE option not supported yet" which is expected
-        expect { adapter.reset_sequence!(sequence_name, '100') }.to raise_error(
-          ActiveRecord::StatementInvalid, /ALTER SEQUENCE option not supported/
-        )
+        allow(adapter).to receive(:execute).and_call_original
+        # DuckDB refuses the statement. The wording depends on the version: 1.5 says "ALTER SEQUENCE
+        # option not supported yet", while 2.0's parser rejects RESTART as a syntax error
+        expect { adapter.reset_sequence!(sequence_name, '100') }.to raise_error(ActiveRecord::StatementInvalid)
+        expect(adapter).to have_received(:execute)
+          .with('ALTER SEQUENCE "seq_reset_test_id_seq" RESTART WITH 100', 'Reset Sequence')
 
         adapter.drop_table(:seq_reset_test)
       end
