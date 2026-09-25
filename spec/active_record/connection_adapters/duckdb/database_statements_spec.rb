@@ -124,14 +124,7 @@ RSpec.describe 'DatabaseStatements' do
 
     it 'accepts all Rails version keyword arguments' do
       # Test that the method accepts all kwargs without error
-      # Rails 8.0+ uses raw_execute under the hood, Rails 7.2 uses internal_exec_query directly
-      kwargs = {
-        prepare: false,
-        async: false,
-        allow_retry: false
-      }
-      # materialize_transactions was added in Rails 8.1
-      kwargs[:materialize_transactions] = true if ActiveRecord::VERSION::MAJOR >= 8
+      kwargs = { prepare: false, async: false, allow_retry: false, materialize_transactions: true }
 
       result = connection.internal_exec_query('SELECT 1', 'SQL', [], **kwargs)
 
@@ -231,17 +224,12 @@ RSpec.describe 'DatabaseStatements' do
 
   describe '#exec_update' do
     it 'behaves the same as exec_delete' do
-      # In Rails 7.2, exec_update is an alias for exec_delete in our adapter
-      # In Rails 8.0+, they're separate methods in the base class but behave identically
-      if ActiveRecord::VERSION::MAJOR < 8
-        expect(connection.method(:exec_update)).to eq(connection.method(:exec_delete))
-      else
-        # Both should return integer row counts
-        delete_result = connection.exec_delete("DELETE FROM statement_test WHERE name = 'NonExistent'")
-        update_result = connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'NonExistent'")
-        expect(delete_result).to eq(0)
-        expect(update_result).to eq(0)
-      end
+      # They're separate methods in the base class but behave identically:
+      # both return integer row counts
+      delete_result = connection.exec_delete("DELETE FROM statement_test WHERE name = 'NonExistent'")
+      update_result = connection.exec_update("UPDATE statement_test SET age = 99 WHERE name = 'NonExistent'")
+      expect(delete_result).to eq(0)
+      expect(update_result).to eq(0)
     end
 
     it 'returns the number of updated rows' do

@@ -372,7 +372,7 @@ RSpec.describe 'ActiveRecord::DuckDB Integration' do
   describe 'version compatibility' do
     it 'requires supported ActiveRecord version' do
       ar_version = Gem::Version.new(ActiveRecord::VERSION::STRING)
-      minimum_version = Gem::Version.new('7.0.0')
+      minimum_version = Gem::Version.new('8.0.0')
       expect(ar_version).to be >= minimum_version
     end
 

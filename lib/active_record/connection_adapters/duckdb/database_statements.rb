@@ -69,7 +69,6 @@ module ActiveRecord
 
         # Casts a DuckDB result to ActiveRecord::Result format.
         # Used by Rails 8.0+ internal_exec_query which calls cast_result(raw_execute(...)).
-        # Also called by Rails 7.2's internal_exec_query implementation in DatabaseStatementsRails72.
         # @param result [DuckDB::Result, nil] The DuckDB result to cast
         # @return [ActiveRecord::Result] The ActiveRecord-compatible result
         def cast_result(result)
@@ -124,7 +123,7 @@ module ActiveRecord
         # Ensures write queries are allowed on the current connection.
         # Handles API differences between Rails versions:
         # - Rails 8.1+: Uses ensure_writes_are_allowed
-        # - Rails 7.2-8.0: Uses check_if_write_query + mark_transaction_written_if_write
+        # - Rails 8.0: Uses check_if_write_query + mark_transaction_written_if_write
         #
         # The two APIs divide the work differently. Rails 8.0's check_if_write_query asks
         # write_query? itself, so it is safe to hand it every statement. Rails 8.1 moved that
@@ -138,7 +137,7 @@ module ActiveRecord
             # Rails 8.1+
             ensure_writes_are_allowed(sql) if write_query?(sql)
           else
-            # Rails 7.2-8.0
+            # Rails 8.0
             check_if_write_query(sql)
             mark_transaction_written_if_write(sql)
           end

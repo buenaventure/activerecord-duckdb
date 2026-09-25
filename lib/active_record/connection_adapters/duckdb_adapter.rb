@@ -67,20 +67,13 @@ module ActiveRecord
       # This must come after DatabaseStatements. It overrides #affected_rows for funneled writes.
       include Duckdb::Quack
 
-      # Include Rails version-specific database statements.
-      # Rails 8.0+: Use raw_execute, let base class handle internal_exec_query.
-      # Rails 7.2: Must implement internal_exec_query directly.
-      if ActiveRecord::VERSION::MAJOR >= 8
-        require 'active_record/connection_adapters/duckdb/database_statements_rails8'
-        include Duckdb::DatabaseStatementsRails8
-      else
-        require 'active_record/connection_adapters/duckdb/database_statements_rails72'
-        include Duckdb::DatabaseStatementsRails72
-      end
+      # Use raw_execute, let base class handle internal_exec_query.
+      require 'active_record/connection_adapters/duckdb/database_statements_rails8'
+      include Duckdb::DatabaseStatementsRails8
 
       # Include Rails version-specific schema statements.
       # Rails 8.1+: Column constructor includes cast_type parameter.
-      # Rails 7.2/8.0: Column constructor without cast_type parameter.
+      # Rails 8.0: Column constructor without cast_type parameter.
       if ActiveRecord::VERSION::MAJOR > 8 ||
          (ActiveRecord::VERSION::MAJOR == 8 && ActiveRecord::VERSION::MINOR >= 1)
         require 'active_record/connection_adapters/duckdb/schema_statements_rails81'

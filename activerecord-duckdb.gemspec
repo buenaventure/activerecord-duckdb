@@ -35,7 +35,7 @@ Gem::Specification.new do |spec|
 
   # Uncomment to register a new dependency of your gem
   # spec.add_dependency "example-gem", "~> 1.0"
-  spec.add_dependency 'activerecord', '>= 7.0.0'
+  spec.add_dependency 'activerecord', '>= 8.0', '< 8.3'
   spec.add_dependency 'duckdb', '>= 1.5.0.2', '< 2.0'
   spec.metadata['rubygems_mfa_required'] = 'true'
 end

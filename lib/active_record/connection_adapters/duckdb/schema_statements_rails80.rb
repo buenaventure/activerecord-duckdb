@@ -3,7 +3,7 @@
 module ActiveRecord
   module ConnectionAdapters
     module Duckdb
-      # Rails 7.2 and 8.0 specific schema statement implementations.
+      # Rails 8.0 specific schema statement implementations.
       # Column constructor: (name, default, sql_type_metadata, null, default_function, **options)
       module SchemaStatementsRails80
         # Creates a new Column object from DuckDB field information.
