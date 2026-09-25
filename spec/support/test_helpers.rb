@@ -1,6 +1,30 @@
 # frozen_string_literal: true
 
 module TestHelpers
+  # Leaves the given tables out of schema dumps while the block runs, then restores the setting.
+  #
+  # The setting is global. Rails 8.2 moved it from SchemaDumper.ignore_tables to
+  # ActiveRecord.schema_ignored_tables, and there it also hides the tables from the schema cache,
+  # so a model on an ignored table raises "Table doesn't exist". It must not leak into later
+  # examples.
+  #
+  # @param tables [Array<String, Regexp>] Tables to leave out of the dump
+  # @yield The block to run with the tables ignored
+  # @return [Object] The block's value
+  def with_schema_ignored_tables(tables)
+    # Rails 8.2 deprecates SchemaDumper.ignore_tables in favour of this setting.
+    holder, reader = if ActiveRecord.respond_to?(:schema_ignored_tables)
+                       [ActiveRecord, :schema_ignored_tables]
+                     else
+                       [ActiveRecord::SchemaDumper, :ignore_tables]
+                     end
+    original = holder.public_send(reader)
+    holder.public_send(:"#{reader}=", tables)
+    yield
+  ensure
+    holder&.public_send(:"#{reader}=", original)
+  end
+
   # Database connection helpers
   def memory_config
     {

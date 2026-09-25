@@ -176,8 +176,9 @@ RSpec.describe 'DuckLake Migrations' do
 
         require 'stringio'
         stream = StringIO.new
-        ActiveRecord::SchemaDumper.ignore_tables = [/^ducklake_/]
-        ActiveRecord::SchemaDumper.dump(ActiveRecord::Base.connection_pool, stream)
+        with_schema_ignored_tables([/^ducklake_/]) do
+          ActiveRecord::SchemaDumper.dump(ActiveRecord::Base.connection_pool, stream)
+        end
         schema = stream.string
 
         # The dumped schema includes the partition expressions.
