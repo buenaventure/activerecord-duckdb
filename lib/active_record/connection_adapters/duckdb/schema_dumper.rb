@@ -21,6 +21,9 @@ module ActiveRecord
           # Add DuckLake partitioning if present
           dump_partitioning(table, stream)
 
+          # Add DuckLake sort order if present
+          dump_sorting(table, stream)
+
           # Add DuckLake table-level options if present
           dump_table_options(table, stream)
         end
@@ -81,6 +84,19 @@ module ActiveRecord
           # Format the expressions array as Ruby code
           expressions_code = expressions.map(&:inspect).join(', ')
           stream.puts "  set_partitioned_by #{table_name.inspect}, [#{expressions_code}]"
+        end
+
+        # Dumps the DuckLake sort order for a table
+        # @param table_name [String] The table name
+        # @param stream [IO] The output stream
+        # @return [void]
+        def dump_sorting(table_name, stream)
+          return unless @connection.respond_to?(:sort_expressions)
+
+          expressions = @connection.sort_expressions(table_name)
+          return if expressions.nil? || expressions.empty?
+
+          stream.puts "  set_sorted_by #{table_name.inspect}, [#{expressions.map(&:inspect).join(", ")}]"
         end
 
         # Dumps DuckLake table-level options

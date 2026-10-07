@@ -453,6 +453,60 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
       end
     end
 
+    describe 'sorted tables' do
+      before do
+        connection.create_table(:events, id: false) do |t|
+          t.bigint :user_id
+          t.datetime :created_at
+          t.string :event_type
+        end
+      end
+
+      after do
+        connection.drop_table(:events) if connection.table_exists?(:events)
+      end
+
+      it 'dumps the sort expressions in order' do
+        connection.set_sorted_by(:events, %w[user_id created_at])
+
+        expect(dump_schema).to include('set_sorted_by "events", ["user_id", "created_at"]')
+      end
+
+      # ASC and NULLS LAST are the defaults, so the dump names a direction and a null order only
+      # where they differ. Anything else would not survive a dump and a reload unchanged.
+      it 'keeps only a direction and a null order that differ from the defaults' do
+        connection.set_sorted_by(
+          :events, ['created_at DESC', 'user_id ASC NULLS LAST', 'event_type NULLS FIRST', 'lower(event_type)']
+        )
+
+        expect(connection.sort_expressions(:events))
+          .to eq(['created_at DESC', 'user_id', 'event_type NULLS FIRST', 'lower(event_type)'])
+      end
+
+      it 'reports only the current sort order after a table is sorted again' do
+        connection.set_sorted_by(:events, ['event_type'])
+        connection.set_sorted_by(:events, ['created_at DESC'])
+
+        expect(connection.sort_expressions(:events)).to eq(['created_at DESC'])
+      end
+
+      it 'reports no sort order after a reset' do
+        connection.set_sorted_by(:events, ['user_id'])
+        connection.reset_sorted_by(:events)
+
+        expect(connection.sort_expressions(:events)).to be_nil
+        expect(dump_schema).not_to include('set_sorted_by')
+      end
+
+      it 'dumps the sort order after the partitioning of the same table' do
+        connection.set_partitioned_by(:events, ['month(created_at)'])
+        connection.set_sorted_by(:events, ['user_id'])
+
+        schema = dump_schema
+        expect(schema.index('set_partitioned_by "events"')).to be < schema.index('set_sorted_by "events"')
+      end
+    end
+
     describe 'non-partitioned tables' do
       it 'does not include set_partitioned_by for regular tables' do
         connection.create_table(:simple_table, id: false) do |t|

@@ -200,6 +200,73 @@ module ActiveRecord
           nil
         end
 
+        # Sets the sort order for a DuckLake table
+        # DuckLake sorts the rows of each data file it writes: on insert, on compaction, and when it
+        # flushes inlined data. A sort order replaces the previous one and applies only to files
+        # written after the change.
+        # @param table_name [String, Symbol] The name of the table to sort
+        # @param expressions [Array<String>] Array of SQL sort expressions, each with an optional
+        #   direction and null order (e.g., ['user_id', 'created_at DESC NULLS FIRST'])
+        # @return [void]
+        # @example Sort by user, then by time
+        #   set_sorted_by(:events, ['user_id', 'created_at'])
+        # @see https://ducklake.select/docs/stable/duckdb/advanced_features/sorted_tables
+        def set_sorted_by(table_name, expressions)
+          sql = "ALTER TABLE #{quote_table_name(table_name)} SET SORTED BY (#{expressions.join(", ")})"
+          execute(sql, 'Set Sorted By')
+        end
+
+        # Removes the sort order from a DuckLake table
+        # Data files written before the change keep their order.
+        # @param table_name [String, Symbol] The name of the table
+        # @return [void]
+        def reset_sorted_by(table_name)
+          execute("ALTER TABLE #{quote_table_name(table_name)} RESET SORTED BY", 'Reset Sorted By')
+        end
+
+        # Returns the sort expressions for a DuckLake table
+        # An expression carries its direction and null order only where they differ from the
+        # defaults (ASC, NULLS LAST), so the result round-trips through #set_sorted_by.
+        # @param table_name [String, Symbol] The name of the table
+        # @return [Array<String>] Array of sort expressions (e.g., ['user_id', 'created_at DESC'])
+        # @return [nil] If the table is not sorted or not in DuckLake mode
+        def sort_expressions(table_name)
+          return nil unless ducklake?
+
+          metadata_schema = ducklake_metadata_schema
+          return nil unless metadata_schema
+
+          # Schema:
+          #   ducklake_sort_info:       sort_id, table_id, begin_snapshot, end_snapshot
+          #   ducklake_sort_expression: sort_id, table_id, sort_key_index, expression, dialect,
+          #                             sort_direction, null_order
+          #
+          # Like the partitioning, only ducklake_sort_info is versioned. A reset sort order closes
+          # its row there and opens no new one.
+          sql = <<~SQL
+            SELECT se.expression, se.sort_direction, se.null_order
+            FROM #{quote_table_name(metadata_schema)}.ducklake_sort_expression se
+            JOIN #{quote_table_name(metadata_schema)}.ducklake_sort_info si
+              ON si.sort_id = se.sort_id AND si.end_snapshot IS NULL
+            JOIN #{quote_table_name(metadata_schema)}.ducklake_table t ON si.table_id = t.table_id
+            WHERE t.table_name = #{quote(table_name.to_s)}
+              AND t.end_snapshot IS NULL
+            ORDER BY se.sort_key_index
+          SQL
+
+          expressions = execute(sql, 'Get Sort Expressions').map do |expression, direction, null_order|
+            sort = +expression.to_s
+            sort << ' DESC' if direction == 'DESC'
+            sort << ' NULLS FIRST' if null_order == 'NULLS_FIRST'
+            sort
+          end
+
+          expressions.empty? ? nil : expressions
+        rescue StandardError
+          # A catalog of an older DuckLake version has no sort tables, so the table counts as unsorted
+          nil
+        end
+
         # Returns the DuckLake metadata schema name for the current database
         # @return [String, nil] The metadata schema name or nil if not found
         def ducklake_metadata_schema

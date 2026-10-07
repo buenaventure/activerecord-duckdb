@@ -19,6 +19,9 @@
   server's catalog, so one `nextval()`, `uuid()`, or `now()` stops every later connection from
   attaching. To find the cause, the error probes the server through `quack_query`, which needs no
   attachment, and names the offending `database.table.column`.
+- Add `set_sorted_by`, `reset_sorted_by`, and `sort_expressions` for the sort order of a DuckLake
+  table. DuckLake sorts each data file it writes by this order. The schema dump records the sort
+  order as `set_sorted_by`, after `set_partitioned_by`.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
 
 ### Changed
