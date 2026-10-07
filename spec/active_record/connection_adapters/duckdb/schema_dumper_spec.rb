@@ -589,6 +589,37 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
         expect(schema).to include('parquet_version')
       end
 
+      # DuckLake stores parquet_version as "V2", but set_option accepts a number only.
+      it 'dumps parquet_version as a number that set_option accepts' do
+        connection.set_ducklake_option('parquet_version', '2')
+
+        expect(connection.ducklake_options).to include('parquet_version' => '2')
+        expect(dump_schema).to include('set_ducklake_option "parquet_version", "2"')
+      end
+
+      it 'loads a dumped parquet_version into a new DuckLake' do
+        connection.set_ducklake_option('parquet_version', '2')
+        schema = dump_schema
+
+        load_dir = Dir.mktmpdir('ducklake_schema_load')
+        begin
+          FileUtils.mkdir_p(File.join(load_dir, 'data'))
+          ActiveRecord::Base.establish_connection(
+            ducklake_config.merge(attachments: [{
+                                    name: 'ducklake',
+                                    connection_string: "ducklake:#{File.join(load_dir, "test.ducklake")}",
+                                    options: "DATA_PATH '#{File.join(load_dir, "data")}'"
+                                  }])
+          )
+
+          expect { ActiveRecord::Schema.instance_eval(schema) }.not_to raise_error
+          expect(ActiveRecord::Base.connection.ducklake_options).to include('parquet_version' => '2')
+        ensure
+          ActiveRecord::Base.remove_connection
+          FileUtils.rm_rf(load_dir)
+        end
+      end
+
       it 'dumps parquet_compression option' do
         connection.set_ducklake_option('parquet_compression', 'zstd')
 
@@ -647,6 +678,13 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
 
         schema = dump_schema
         expect(schema).to include('set_ducklake_option "parquet_compression", "zstd", "events"')
+      end
+
+      it 'dumps a table-specific parquet_version as a number that set_option accepts' do
+        connection.set_ducklake_option('parquet_version', '2', :events)
+
+        expect(connection.ducklake_table_options(:events)).to include('parquet_version' => '2')
+        expect(dump_schema).to include('set_ducklake_option "parquet_version", "2", "events"')
       end
 
       it 'places table options after the table definition' do

@@ -341,7 +341,7 @@ module ActiveRecord
           result.each do |row|
             key, value = row
             # Only include user-configurable options, not internal metadata
-            options[key] = value if DUMPABLE_DUCKLAKE_OPTIONS.include?(key)
+            options[key] = normalize_ducklake_option(key, value) if DUMPABLE_DUCKLAKE_OPTIONS.include?(key)
           end
 
           options.empty? ? nil : options
@@ -380,7 +380,7 @@ module ActiveRecord
           # block that returns [] raises ArgumentError. The rescue below turned that error
           # into nil. So a single non-dumpable key dropped every dumpable key with it.
           options = result.to_a.filter_map do |key, value|
-            [key, value] if DUMPABLE_DUCKLAKE_OPTIONS.include?(key)
+            [key, normalize_ducklake_option(key, value)] if DUMPABLE_DUCKLAKE_OPTIONS.include?(key)
           end.to_h
 
           options.presence
@@ -596,6 +596,20 @@ module ActiveRecord
         # @return [Hash{String => Object}] The reader's answer per table
         def per_table(tables)
           tables.to_h { |table| [table.to_s, yield(table)] }
+        end
+
+        # Changes a stored DuckLake option value back to the form that set_option accepts.
+        #
+        # DuckLake stores parquet_version as "V2", but set_option('parquet_version', ...) accepts
+        # a number only. Without this change, a schema dump writes "V2" and the load of that dump
+        # fails. All other options are returned unchanged.
+        # @param key [String] The option name
+        # @param value [String] The value from ducklake_metadata
+        # @return [String] The value that set_option accepts
+        def normalize_ducklake_option(key, value)
+          return value unless key == 'parquet_version'
+
+          value.to_s.sub(/\AV(?=\d+\z)/i, '')
         end
 
         # Parses DuckDB field information and returns a hash with all values needed
