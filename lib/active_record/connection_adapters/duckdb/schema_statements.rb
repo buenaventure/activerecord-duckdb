@@ -283,7 +283,7 @@ module ActiveRecord
 
         # Sets a DuckLake-specific option using CALL set_option
         # @param option_name [String] The name of the option to set
-        # @param value [String, Integer] The value to set
+        # @param value [String, Integer, Boolean] The value to set
         # @param table_name [String, Symbol, nil] Optional table name for table-scoped options
         # @return [void]
         # @example Set global parquet version
@@ -319,6 +319,12 @@ module ActiveRecord
           per_thread_output
           encrypted
         ].freeze
+
+        # DuckLake options that DuckLake stores as a byte count
+        DUCKLAKE_SIZE_OPTIONS = %w[target_file_size parquet_row_group_size_bytes].freeze
+
+        # DuckLake options that DuckLake stores as "true" or "false"
+        DUCKLAKE_BOOLEAN_OPTIONS = %w[hive_file_pattern require_commit_message per_thread_output].freeze
 
         # Returns DuckLake options for schema dumping
         # @return [Hash] Hash of option_name => value for user-configurable options
@@ -600,16 +606,32 @@ module ActiveRecord
 
         # Changes a stored DuckLake option value back to the form that set_option accepts.
         #
-        # DuckLake stores parquet_version as "V2", but set_option('parquet_version', ...) accepts
-        # a number only. Without this change, a schema dump writes "V2" and the load of that dump
-        # fails. All other options are returned unchanged.
+        # Without this change, a schema dump writes the stored value and the load of that dump
+        # fails for these options:
+        # - DuckLake stores parquet_version as "V2", but set_option accepts a number only.
+        # - DuckLake stores the size options as a byte count ("512000000"), but set_option
+        #   accepts a size with a unit only ("512000000B").
+        # - DuckLake stores the boolean options as "true" or "false", but set_option rejects
+        #   these strings for some options. A Ruby boolean is quoted as TRUE or FALSE.
+        # DuckLake stores rewrite_delete_threshold as a formatted double ("0.500000"). This
+        # method removes the trailing zeros for a cleaner dump. All other options are returned
+        # unchanged.
         # @param key [String] The option name
         # @param value [String] The value from ducklake_metadata
-        # @return [String] The value that set_option accepts
+        # @return [String, Boolean] The value that set_option accepts
         def normalize_ducklake_option(key, value)
-          return value unless key == 'parquet_version'
-
-          value.to_s.sub(/\AV(?=\d+\z)/i, '')
+          case key
+          when 'parquet_version'
+            value.to_s.sub(/\AV(?=\d+\z)/i, '')
+          when *DUCKLAKE_SIZE_OPTIONS
+            value.to_s.match?(/\A\d+\z/) ? "#{value}B" : value
+          when *DUCKLAKE_BOOLEAN_OPTIONS
+            { 'true' => true, 'false' => false }.fetch(value.to_s.downcase, value)
+          when 'rewrite_delete_threshold'
+            value.to_s.match?(/\A\d+\.\d+\z/) ? value.to_s.sub(/0+\z/, '').delete_suffix('.') : value
+          else
+            value
+          end
         end
 
         # Parses DuckDB field information and returns a hash with all values needed

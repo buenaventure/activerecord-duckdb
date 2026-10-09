@@ -597,26 +597,94 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
         expect(dump_schema).to include('set_ducklake_option "parquet_version", "2"')
       end
 
+      # Connects to a new, empty DuckLake for the duration of the block
+      def with_new_ducklake(attach_options = nil, settings: {})
+        load_dir = Dir.mktmpdir('ducklake_schema_load')
+        FileUtils.mkdir_p(File.join(load_dir, 'data'))
+        ActiveRecord::Base.establish_connection(
+          ducklake_config.merge(settings: settings,
+                                attachments: [{
+                                  name: 'ducklake',
+                                  connection_string: "ducklake:#{File.join(load_dir, "test.ducklake")}",
+                                  options: ["DATA_PATH '#{File.join(load_dir, "data")}'", attach_options].compact.join(', ')
+                                }])
+        )
+        yield ActiveRecord::Base.connection
+      ensure
+        ActiveRecord::Base.remove_connection
+        FileUtils.rm_rf(load_dir)
+      end
+
       it 'loads a dumped parquet_version into a new DuckLake' do
         connection.set_ducklake_option('parquet_version', '2')
         schema = dump_schema
 
-        load_dir = Dir.mktmpdir('ducklake_schema_load')
-        begin
-          FileUtils.mkdir_p(File.join(load_dir, 'data'))
-          ActiveRecord::Base.establish_connection(
-            ducklake_config.merge(attachments: [{
-                                    name: 'ducklake',
-                                    connection_string: "ducklake:#{File.join(load_dir, "test.ducklake")}",
-                                    options: "DATA_PATH '#{File.join(load_dir, "data")}'"
-                                  }])
-          )
-
+        with_new_ducklake do |new_connection|
           expect { ActiveRecord::Schema.instance_eval(schema) }.not_to raise_error
-          expect(ActiveRecord::Base.connection.ducklake_options).to include('parquet_version' => '2')
-        ensure
-          ActiveRecord::Base.remove_connection
-          FileUtils.rm_rf(load_dir)
+          expect(new_connection.ducklake_options).to include('parquet_version' => '2')
+        end
+      end
+
+      it 'dumps the retention options' do
+        connection.set_ducklake_option('expire_older_than', '21 days')
+        connection.set_ducklake_option('delete_older_than', '7 days')
+
+        schema = dump_schema
+        expect(schema).to include('set_ducklake_option "delete_older_than", "7 days"')
+        expect(schema).to include('set_ducklake_option "expire_older_than", "21 days"')
+      end
+
+      it 'dumps each settable option in the form that set_option accepts' do
+        connection.set_ducklake_option('target_file_size', '512MB')
+        connection.set_ducklake_option('hive_file_pattern', false)
+        connection.set_ducklake_option('rewrite_delete_threshold', 0.5)
+
+        schema = dump_schema
+        expect(schema).to include('set_ducklake_option "target_file_size", "512000000B"')
+        expect(schema).to include('set_ducklake_option "hive_file_pattern", false')
+        expect(schema).to include('set_ducklake_option "rewrite_delete_threshold", "0.5"')
+      end
+
+      it 'does not dump the encrypted option' do
+        expect(dump_schema).not_to include('"encrypted"')
+      end
+
+      it 'does not dump the encrypted option of an encrypted DuckLake' do
+        with_new_ducklake('ENCRYPTED') do |new_connection|
+          new_connection.set_ducklake_option('parquet_compression', 'zstd')
+          expect(new_connection.ducklake_options).to include('encrypted' => 'true')
+
+          schema = dump_schema
+          expect(schema).to include('set_ducklake_option "parquet_compression", "zstd"')
+          expect(schema).not_to include('"encrypted"')
+        end
+      end
+
+      it 'loads all dumped global options into a new DuckLake' do
+        {
+          'data_inlining_row_limit' => 10,
+          'target_file_size' => '512MB',
+          'parquet_row_group_size_bytes' => '64MB',
+          'parquet_row_group_size' => 100_000,
+          'parquet_compression' => 'zstd',
+          'parquet_compression_level' => 3,
+          'parquet_version' => '2',
+          'hive_file_pattern' => false,
+          'require_commit_message' => false,
+          'rewrite_delete_threshold' => 0.5,
+          'delete_older_than' => '7 days',
+          'expire_older_than' => '21 days',
+          'per_thread_output' => true
+        }.each { |name, value| connection.set_ducklake_option(name, value) }
+        dumped_options = connection.ducklake_options.except('encrypted')
+        expect(dumped_options.keys).to match_array(described_class::SETTABLE_DUCKLAKE_OPTIONS)
+        schema = dump_schema
+
+        # DuckDB writes no Parquet file with parquet_row_group_size_bytes while it preserves
+        # the insertion order. The load writes the schema version after the options.
+        with_new_ducklake(settings: { preserve_insertion_order: false }) do |new_connection|
+          expect { ActiveRecord::Schema.instance_eval(schema) }.not_to raise_error
+          expect(new_connection.ducklake_options.except('encrypted')).to eq(dumped_options)
         end
       end
 
@@ -710,6 +778,29 @@ RSpec.describe ActiveRecord::ConnectionAdapters::Duckdb::SchemaDumper do
         expect(schema).to include('"parquet_compression", "snappy", "logs"')
 
         connection.drop_table(:logs)
+      end
+
+      # Rails writes one blank line between two tables. A second blank line, or a blank line
+      # before the final end, causes rubocop offenses in the generated file.
+      it 'writes no extra blank line after the table options' do
+        connection.set_ducklake_option('parquet_compression', 'zstd', :events)
+        connection.create_table(:logs, id: false) do |t|
+          t.string :message
+        end
+        connection.set_ducklake_option('parquet_compression', 'snappy', :logs)
+
+        schema = dump_schema
+        expect(schema).to include(%(  set_ducklake_option "parquet_compression", "zstd", "events"\n\n  create_table "logs"))
+        expect(schema).to end_with(%(  set_ducklake_option "parquet_compression", "snappy", "logs"\nend\n))
+
+        connection.drop_table(:logs)
+      end
+
+      # DuckLake stores rewrite_delete_threshold as a formatted double ("0.000000").
+      it 'dumps a table-specific rewrite_delete_threshold without trailing zeros' do
+        connection.set_ducklake_option('rewrite_delete_threshold', 0, :events)
+
+        expect(dump_schema).to include('set_ducklake_option "rewrite_delete_threshold", "0", "events"')
       end
 
       it 'does not mix up global and table options' do

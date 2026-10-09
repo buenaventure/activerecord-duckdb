@@ -7,8 +7,9 @@ module ActiveRecord
       # Extends Rails' ConnectionAdapters::SchemaDumper to handle DuckDB-specific
       # column types, constraints, and DuckLake features like partitioning
       class SchemaDumper < ConnectionAdapters::SchemaDumper # :nodoc:
-        # Valid DuckLake options that can be set via set_option
-        SETTABLE_DUCKLAKE_OPTIONS = %w[parquet_version parquet_compression].freeze
+        # Global DuckLake options that set_option accepts. DuckLake sets 'encrypted' at ATTACH
+        # time only, and set_option rejects it.
+        SETTABLE_DUCKLAKE_OPTIONS = (SchemaStatements::DUMPABLE_DUCKLAKE_OPTIONS - %w[encrypted]).freeze
 
         # Override table dumping to include DuckLake-specific features
         # @param table [String] The table name
@@ -52,7 +53,7 @@ module ActiveRecord
           dump_ducklake_options(stream)
         end
 
-        # Dumps DuckLake options (parquet_version, parquet_compression, etc.)
+        # Dumps the global DuckLake options in SETTABLE_DUCKLAKE_OPTIONS
         # @param stream [IO] The output stream
         # @return [void]
         def dump_ducklake_options(stream)
@@ -99,7 +100,8 @@ module ActiveRecord
           stream.puts "  set_sorted_by #{table_name.inspect}, [#{expressions.map(&:inspect).join(", ")}]"
         end
 
-        # Dumps DuckLake table-level options
+        # Dumps DuckLake table-level options. Rails writes the blank line between two tables,
+        # so this method writes no blank line after the options.
         # @param table_name [String] The table name
         # @param stream [IO] The output stream
         # @return [void]
@@ -112,7 +114,6 @@ module ActiveRecord
           options.sort.each do |name, value|
             stream.puts "  set_ducklake_option #{name.inspect}, #{value.inspect}, #{table_name.inspect}"
           end
-          stream.puts
         end
 
         # Generates column specification for schema dumping
