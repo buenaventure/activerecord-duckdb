@@ -20,7 +20,7 @@ runs:
     - name: Install DuckDB
       shell: sh
       env:
-        DUCKDB_VERSION: v1.5.5
+        DUCKDB_VERSION: v1.5.6
       run: |
         base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}"
 

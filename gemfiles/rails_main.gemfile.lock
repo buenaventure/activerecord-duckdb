@@ -52,7 +52,7 @@ GEM
       reline (>= 0.3.8)
     diff-lcs (1.6.2)
     drb (2.2.3)
-    duckdb (1.5.5.1)
+    duckdb (1.5.6.1)
       bigdecimal (>= 3.1.4)
     erb (6.0.7)
     fasterer (0.11.0)
@@ -219,7 +219,7 @@ CHECKSUMS
   debug (1.11.1) sha256=2e0b0ac6119f2207a6f8ac7d4a73ca8eb4e440f64da0a3136c30343146e952b6
   diff-lcs (1.6.2) sha256=9ae0d2cba7d4df3075fe8cd8602a8604993efc0dfa934cff568969efb1909962
   drb (2.2.3) sha256=0b00d6fdb50995fe4a45dea13663493c841112e4068656854646f418fda13373
-  duckdb (1.5.5.1) sha256=d2a2402aebc8d5c6b74b0c9592ea770199a08d75fca2c8e207ab842dc2735903
+  duckdb (1.5.6.1) sha256=a77c2913f8ada65d2f2e528d9a9acd24c8d7a7edeb657bfa1cbcb53d6506adca
   erb (6.0.7) sha256=c5ca6dc25b0ef974a44dc8f59fe847577122483b1968a38dec305c60bf91ee92
   fasterer (0.11.0) sha256=9c38b77583584f3339a729eb077fd8f2856a317abe747528f6563d7c23e9dda8
   fuubar (2.5.1) sha256=b272a7804b282661c7fab583a3764f92543cb482c365ae39c685cd218fdd4880
