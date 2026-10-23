@@ -23,6 +23,17 @@
   table. DuckLake sorts each data file it writes by this order. The schema dump records the sort
   order as `set_sorted_by`, after `set_partitioned_by`.
 - Add `Quoting#quoted_binary`. This lets the adapter write binary columns without bind parameters.
+- Add support for DuckDB 2.0:
+  - Quack funnel mode routes statements with `CONNECT` on DuckDB 2.0 and later. DuckDB 2.0 names
+    `CONNECT` as the successor of the `quack.query('...')` wrapper, which the adapter still uses on
+    DuckDB 1.5. Both reach the same server-side call.
+  - Add `ssl_fingerprint` to the `quack:` section. From DuckDB 2.0 on, a Quack server speaks HTTPS
+    on any host but localhost, with a self-signed certificate that clients pin by its fingerprint.
+  - On DuckDB 2.0, a Quack server no longer locks out later connections over a computed column
+    default, so integer primary keys work across connections.
+  - Allow the `duckdb` gem's 2.x releases. The gem's version follows the DuckDB library it wraps.
+  - CI runs the suite against both DuckDB 1.5.6 and 2.0.0. It installs 2.0's new release tarballs
+    as well as 1.x's zip files.
 
 ### Changed
 

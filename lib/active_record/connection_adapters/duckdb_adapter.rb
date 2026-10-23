@@ -400,6 +400,8 @@ module ActiveRecord
         attach_quack
         use_database
         lock_configuration
+        # Last: from DuckDB 2.0 on, this sends every later statement to the Quack server
+        enter_quack
       end
 
       # Checks if DuckDB configuration is locked.
@@ -407,6 +409,9 @@ module ActiveRecord
       # @return [Boolean] true if configuration is locked
       def configuration_locked?
         return false unless raw_connection
+        # A connection that ran CONNECT would ask the Quack server instead of itself. It is
+        # configured already: CONNECT is the last step of #configure_connection.
+        return true if quack_connected?
 
         result = raw_connection.query("SELECT current_setting('lock_configuration')")
         result.first&.first == true
